@@ -24,26 +24,41 @@ async function getZerodhaAccessToken(env: Env): Promise<string> {
   );
 }
 
-async function zerodhaGet(path: string, env: Env): Promise<unknown> {
+async function zerodhaGet(
+  path: string,
+  env: Env
+): Promise<unknown> {
   if (!env.ZERODHA_API_KEY) {
-    throw new Error("ZERODHA_API_KEY secret is not configured");
+    throw new Error(
+      "ZERODHA_API_KEY secret is not configured"
+    );
   }
 
   const accessToken = await getZerodhaAccessToken(env);
 
-  const response = await fetch("https://api.kite.trade" + path, {
-    method: "GET",
-    headers: {
-      "X-Kite-Version": "3",
-      "Authorization": "token " + env.ZERODHA_API_KEY + ":" + accessToken,
-    },
-  });
+  const response = await fetch(
+    "https://api.kite.trade" + path,
+    {
+      method: "GET",
+      headers: {
+        "X-Kite-Version": "3",
+        "Authorization":
+          "token " +
+          env.ZERODHA_API_KEY +
+          ":" +
+          accessToken,
+      },
+    }
+  );
 
   const data = await response.json();
 
   if (!response.ok) {
     throw new Error(
-      "Zerodha API error " + response.status + ": " + JSON.stringify(data)
+      "Zerodha API error " +
+        response.status +
+        ": " +
+        JSON.stringify(data)
     );
   }
 
@@ -55,9 +70,10 @@ async function handleZerodhaLogin(
   env: Env
 ): Promise<Response> {
   if (!env.ZERODHA_API_KEY) {
-    return new Response("ZERODHA_API_KEY secret is not configured", {
-      status: 500,
-    });
+    return new Response(
+      "ZERODHA_API_KEY secret is not configured",
+      { status: 500 }
+    );
   }
 
   const url = new URL(request.url);
@@ -78,8 +94,11 @@ async function handleZerodhaLogin(
       );
     }
 
-    const requestToken = url.searchParams.get("request_token");
-    const status = url.searchParams.get("status");
+    const requestToken =
+      url.searchParams.get("request_token");
+
+    const status =
+      url.searchParams.get("status");
 
     if (status !== "success" || !requestToken) {
       return new Response(
@@ -89,15 +108,22 @@ async function handleZerodhaLogin(
     }
 
     const checksumInput =
-      env.ZERODHA_API_KEY + requestToken + env.ZERODHA_API_SECRET;
+      env.ZERODHA_API_KEY +
+      requestToken +
+      env.ZERODHA_API_SECRET;
 
-    const checksumBuffer = await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(checksumInput)
-    );
+    const checksumBuffer =
+      await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(checksumInput)
+      );
 
-    const checksum = Array.from(new Uint8Array(checksumBuffer))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
+    const checksum = Array.from(
+      new Uint8Array(checksumBuffer)
+    )
+      .map((byte) =>
+        byte.toString(16).padStart(2, "0")
+      )
       .join("");
 
     const tokenResponse = await fetch(
@@ -106,7 +132,8 @@ async function handleZerodhaLogin(
         method: "POST",
         headers: {
           "X-Kite-Version": "3",
-          "Content-Type": "application/x-www-form-urlencoded",
+          "Content-Type":
+            "application/x-www-form-urlencoded",
         },
         body: new URLSearchParams({
           api_key: env.ZERODHA_API_KEY,
@@ -116,7 +143,8 @@ async function handleZerodhaLogin(
       }
     );
 
-    const tokenData = await tokenResponse.json();
+    const tokenData =
+      await tokenResponse.json();
 
     if (!tokenResponse.ok) {
       return new Response(
@@ -128,7 +156,8 @@ async function handleZerodhaLogin(
       );
     }
 
-    const accessToken = tokenData?.data?.access_token;
+    const accessToken =
+      tokenData?.data?.access_token;
 
     if (!accessToken) {
       return new Response(
@@ -155,13 +184,17 @@ async function handleZerodhaLogin(
       {
         status: 200,
         headers: {
-          "Content-Type": "text/plain; charset=utf-8",
+          "Content-Type":
+            "text/plain; charset=utf-8",
         },
       }
     );
   }
 
-  return new Response("Not found", { status: 404 });
+  return new Response(
+    "Not found",
+    { status: 404 }
+  );
 }
 
 function createServer(env: Env) {
@@ -170,10 +203,15 @@ function createServer(env: Env) {
     version: "1.0.0",
   });
 
+  // ------------------------------------------------------------
+  // HELLO
+  // ------------------------------------------------------------
+
   server.registerTool(
     "hello",
     {
-      description: "Basic MCP connectivity test",
+      description:
+        "Basic MCP connectivity test",
       inputSchema: {
         name: z.string().optional(),
       },
@@ -191,6 +229,10 @@ function createServer(env: Env) {
     })
   );
 
+  // ------------------------------------------------------------
+  // ZERODHA AUTH STATUS
+  // ------------------------------------------------------------
+
   server.registerTool(
     "zerodha_auth_status",
     {
@@ -198,21 +240,27 @@ function createServer(env: Env) {
         "Check whether a Zerodha access token is currently available. Read-only.",
     },
     async () => {
-      const token = await getZerodhaAccessToken(env).catch(
-        () => null
-      );
+      const token =
+        await getZerodhaAccessToken(
+          env
+        ).catch(() => null);
 
-      const loginTime = env.ZERODHA_TOKEN_STORE
-        ? await env.ZERODHA_TOKEN_STORE.get("login_time")
-        : null;
+      const loginTime =
+        env.ZERODHA_TOKEN_STORE
+          ? await env.ZERODHA_TOKEN_STORE.get(
+              "login_time"
+            )
+          : null;
 
       return {
         content: [
           {
             text: JSON.stringify(
               {
-                authenticated: Boolean(token),
-                login_time: loginTime,
+                authenticated:
+                  Boolean(token),
+                login_time:
+                  loginTime,
               },
               null,
               2
@@ -224,6 +272,10 @@ function createServer(env: Env) {
     }
   );
 
+  // ------------------------------------------------------------
+  // ZERODHA PROFILE
+  // ------------------------------------------------------------
+
   server.registerTool(
     "zerodha_profile",
     {
@@ -234,7 +286,10 @@ function createServer(env: Env) {
       content: [
         {
           text: JSON.stringify(
-            await zerodhaGet("/user/profile", env),
+            await zerodhaGet(
+              "/user/profile",
+              env
+            ),
             null,
             2
           ),
@@ -243,6 +298,10 @@ function createServer(env: Env) {
       ],
     })
   );
+
+  // ------------------------------------------------------------
+  // ZERODHA MARGINS
+  // ------------------------------------------------------------
 
   server.registerTool(
     "zerodha_margins",
@@ -254,7 +313,10 @@ function createServer(env: Env) {
       content: [
         {
           text: JSON.stringify(
-            await zerodhaGet("/user/margins", env),
+            await zerodhaGet(
+              "/user/margins",
+              env
+            ),
             null,
             2
           ),
@@ -263,6 +325,10 @@ function createServer(env: Env) {
       ],
     })
   );
+
+  // ------------------------------------------------------------
+  // ZERODHA LIVE QUOTE
+  // ------------------------------------------------------------
 
   server.registerTool(
     "zerodha_quote",
@@ -276,7 +342,9 @@ function createServer(env: Env) {
     async ({ symbols }) => {
       const symbolList = symbols
         .split(",")
-        .map((symbol) => symbol.trim())
+        .map((symbol) =>
+          symbol.trim()
+        )
         .filter(Boolean)
         .slice(0, 50);
 
@@ -286,10 +354,14 @@ function createServer(env: Env) {
         );
       }
 
-      const params = new URLSearchParams();
+      const params =
+        new URLSearchParams();
 
       for (const symbol of symbolList) {
-        params.append("i", symbol);
+        params.append(
+          "i",
+          symbol
+        );
       }
 
       return {
@@ -297,7 +369,8 @@ function createServer(env: Env) {
           {
             text: JSON.stringify(
               await zerodhaGet(
-                "/quote?" + params.toString(),
+                "/quote?" +
+                  params.toString(),
                 env
               ),
               null,
@@ -309,6 +382,74 @@ function createServer(env: Env) {
       };
     }
   );
+
+  // ------------------------------------------------------------
+  // ZERODHA NFO INSTRUMENT MASTER
+  // ------------------------------------------------------------
+
+  server.registerTool(
+    "zerodha_instruments",
+    {
+      description:
+        "Read the current Zerodha NFO instrument master. Returns option and futures contract metadata including trading symbol, expiry, strike, instrument token and lot size. Read-only.",
+    },
+    async () => {
+      if (!env.ZERODHA_API_KEY) {
+        throw new Error(
+          "ZERODHA_API_KEY secret is not configured"
+        );
+      }
+
+      const accessToken =
+        await getZerodhaAccessToken(
+          env
+        );
+
+      const response =
+        await fetch(
+          "https://api.kite.trade/instruments/NFO",
+          {
+            method: "GET",
+            headers: {
+              "X-Kite-Version": "3",
+              "Authorization":
+                "token " +
+                env.ZERODHA_API_KEY +
+                ":" +
+                accessToken,
+            },
+          }
+        );
+
+      if (!response.ok) {
+        const errorText =
+          await response.text();
+
+        throw new Error(
+          "Zerodha instruments API error " +
+            response.status +
+            ": " +
+            errorText
+        );
+      }
+
+      const csv =
+        await response.text();
+
+      return {
+        content: [
+          {
+            text: csv,
+            type: "text",
+          },
+        ],
+      };
+    }
+  );
+
+  // ------------------------------------------------------------
+  // ZERODHA POSITIONS
+  // ------------------------------------------------------------
 
   server.registerTool(
     "zerodha_positions",
@@ -333,6 +474,10 @@ function createServer(env: Env) {
     })
   );
 
+  // ------------------------------------------------------------
+  // ZERODHA HOLDINGS
+  // ------------------------------------------------------------
+
   server.registerTool(
     "zerodha_holdings",
     {
@@ -356,6 +501,10 @@ function createServer(env: Env) {
     })
   );
 
+  // ------------------------------------------------------------
+  // ZERODHA ORDERS
+  // ------------------------------------------------------------
+
   server.registerTool(
     "zerodha_orders",
     {
@@ -366,7 +515,10 @@ function createServer(env: Env) {
       content: [
         {
           text: JSON.stringify(
-            await zerodhaGet("/orders", env),
+            await zerodhaGet(
+              "/orders",
+              env
+            ),
             null,
             2
           ),
@@ -375,6 +527,10 @@ function createServer(env: Env) {
       ],
     })
   );
+
+  // ------------------------------------------------------------
+  // ZERODHA TRADES
+  // ------------------------------------------------------------
 
   server.registerTool(
     "zerodha_trades",
@@ -386,7 +542,10 @@ function createServer(env: Env) {
       content: [
         {
           text: JSON.stringify(
-            await zerodhaGet("/trades", env),
+            await zerodhaGet(
+              "/trades",
+              env
+            ),
             null,
             2
           ),
@@ -395,6 +554,10 @@ function createServer(env: Env) {
       ],
     })
   );
+
+  // ------------------------------------------------------------
+  // ZERODHA ORDER HISTORY
+  // ------------------------------------------------------------
 
   server.registerTool(
     "zerodha_order_history",
@@ -411,7 +574,9 @@ function createServer(env: Env) {
           text: JSON.stringify(
             await zerodhaGet(
               "/orders/" +
-                encodeURIComponent(order_id),
+                encodeURIComponent(
+                  order_id
+                ),
               env
             ),
             null,
@@ -427,18 +592,30 @@ function createServer(env: Env) {
 }
 
 export default {
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
+  async fetch(
+    request,
+    env,
+    ctx
+  ) {
+    const url =
+      new URL(request.url);
 
     if (
       url.pathname === "/login" ||
       url.pathname === "/callback"
     ) {
-      return handleZerodhaLogin(request, env);
+      return handleZerodhaLogin(
+        request,
+        env
+      );
     }
 
     return createMcpHandler(
       () => createServer(env)
-    )(request, env, ctx);
+    )(
+      request,
+      env,
+      ctx
+    );
   },
 } satisfies ExportedHandler<Env>;
