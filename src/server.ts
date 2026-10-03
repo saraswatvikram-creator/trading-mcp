@@ -2874,6 +2874,912 @@ function createServer(
   );
 
   // ==========================================================
+  // CREDIT SPREAD SCANNER
+  // ==========================================================
+
+  server.registerTool(
+    "zerodha_credit_spread_scan",
+    {
+      description:
+        "Scan a NIFTY or BANKNIFTY expiry for defined-risk Bull Put Spreads (BPS) or Bear Call Spreads (BCS). Uses live bid/ask pricing when available, returns indicative LTP pricing when the market is closed, and never places, modifies or cancels orders.",
+
+      inputSchema: {
+        underlying:
+          z.enum([
+            "NIFTY",
+            "BANKNIFTY",
+          ]),
+
+        expiry:
+          z.string().optional(),
+
+        strategy:
+          z.enum([
+            "BPS",
+            "BCS",
+          ]),
+
+        spread_width:
+          z.number().positive(),
+
+        min_otm_pct:
+          z
+            .number()
+            .nonnegative()
+            .optional(),
+
+        max_otm_pct:
+          z
+            .number()
+            .positive()
+            .optional(),
+
+        max_candidates:
+          z
+            .number()
+            .int()
+            .min(1)
+            .max(50)
+            .optional(),
+      },
+    },
+
+    async ({
+      underlying,
+      expiry,
+      strategy,
+      spread_width,
+      min_otm_pct,
+      max_otm_pct,
+      max_candidates,
+    }) => {
+      const instruments =
+        await getNfoInstrumentMaster(
+          env
+        );
+
+      const spotSymbol =
+        underlying ===
+        "NIFTY"
+          ? "NSE:NIFTY 50"
+          : "NSE:NIFTY BANK";
+
+      const spotData =
+        (await zerodhaGet(
+          "/quote?" +
+            new URLSearchParams({
+              i: spotSymbol,
+            }).toString(),
+          env
+        )) as any;
+
+      const spot =
+        spotData?.data?.[
+          spotSymbol
+        ]?.last_price;
+
+      if (
+        typeof spot !==
+          "number" ||
+        spot <= 0
+      ) {
+        throw new Error(
+          "Unable to obtain spot price for " +
+            underlying +
+            "."
+        );
+      }
+
+      const contracts =
+        instruments.filter(
+          (instrument) =>
+            instrument.name ===
+              underlying &&
+            instrument.segment ===
+              "NFO-OPT" &&
+            (
+              instrument.instrument_type ===
+                "CE" ||
+              instrument.instrument_type ===
+                "PE"
+            )
+        );
+
+      const expiries =
+        Array.from(
+          new Set(
+            contracts
+              .map(
+                (x) =>
+                  x.expiry
+              )
+              .filter(Boolean)
+          )
+        ).sort();
+
+      if (
+        expiries.length ===
+        0
+      ) {
+        throw new Error(
+          "No option expiries found for " +
+            underlying +
+            "."
+        );
+      }
+
+      let selectedExpiry =
+        expiry;
+
+      if (
+        !selectedExpiry ||
+        selectedExpiry ===
+          "nearest"
+      ) {
+        const now =
+          new Date();
+
+        const futureExpiries =
+          expiries.filter(
+            (x) =>
+              new Date(
+                x +
+                  "T23:59:59+05:30"
+              ) >= now
+          );
+
+        if (
+          futureExpiries.length ===
+          0
+        ) {
+          throw new Error(
+            "No future option expiry found."
+          );
+        }
+
+        selectedExpiry =
+          futureExpiries[0];
+      }
+
+      if (
+        !expiries.includes(
+          selectedExpiry
+        )
+      ) {
+        throw new Error(
+          "Expiry " +
+            selectedExpiry +
+            " was not found."
+        );
+      }
+
+      const expiryContracts =
+        contracts.filter(
+          (x) =>
+            x.expiry ===
+            selectedExpiry
+        );
+
+      const lotSizes =
+        Array.from(
+          new Set(
+            expiryContracts
+              .map((x) =>
+                Number(
+                  x.lot_size
+                )
+              )
+              .filter(
+                (x) =>
+                  Number.isFinite(
+                    x
+                  ) &&
+                  x > 0
+              )
+          )
+        );
+
+      if (
+        lotSizes.length !==
+        1
+      ) {
+        throw new Error(
+          "Unable to determine a unique lot size for " +
+            underlying +
+            "."
+        );
+      }
+
+      const lotSize =
+        lotSizes[0];
+
+      const minOtmPct =
+        min_otm_pct ??
+        1.0;
+
+      const maxOtmPct =
+        max_otm_pct ??
+        2.5;
+
+      if (
+        minOtmPct >
+        maxOtmPct
+      ) {
+        throw new Error(
+          "min_otm_pct cannot be greater than max_otm_pct."
+        );
+      }
+
+      const maxCandidates =
+        max_candidates ??
+        20;
+
+      const optionType =
+        strategy ===
+        "BPS"
+          ? "PE"
+          : "CE";
+
+      const strikeMap =
+        new Map<
+          number,
+          Record<
+            string,
+            string
+          >
+        >();
+
+      for (
+        const instrument of
+          expiryContracts
+      ) {
+        if (
+          instrument.instrument_type !==
+          optionType
+        ) {
+          continue;
+        }
+
+        const strike =
+          Number(
+            instrument.strike
+          );
+
+        if (
+          !Number.isFinite(
+            strike
+          ) ||
+          strike <= 0
+        ) {
+          continue;
+        }
+
+        strikeMap.set(
+          strike,
+          instrument
+        );
+      }
+
+      const strikes =
+        Array.from(
+          strikeMap.keys()
+        ).sort(
+          (a, b) =>
+            a - b
+        );
+
+      const eligible =
+        strikes
+          .map(
+            (
+              shortStrike
+            ) => {
+              const shortOtmPct =
+                strategy ===
+                "BPS"
+                  ? (
+                      (
+                        spot -
+                        shortStrike
+                      ) /
+                      spot
+                    ) *
+                    100
+                  : (
+                      (
+                        shortStrike -
+                        spot
+                      ) /
+                      spot
+                    ) *
+                    100;
+
+              const longStrike =
+                strategy ===
+                "BPS"
+                  ? shortStrike -
+                    spread_width
+                  : shortStrike +
+                    spread_width;
+
+              const longContract =
+                strikeMap.get(
+                  longStrike
+                );
+
+              const directionValid =
+                strategy ===
+                "BPS"
+                  ? shortStrike <
+                    spot
+                  : shortStrike >
+                    spot;
+
+              if (
+                !directionValid ||
+                shortOtmPct <
+                  minOtmPct ||
+                shortOtmPct >
+                  maxOtmPct ||
+                !longContract
+              ) {
+                return null;
+              }
+
+              return {
+                shortStrike,
+                longStrike,
+                shortOtmPct,
+                shortContract:
+                  strikeMap.get(
+                    shortStrike
+                  )!,
+                longContract,
+              };
+            }
+          )
+          .filter(
+            (
+              item
+            ): item is NonNullable<
+              typeof item
+            > =>
+              item !==
+              null
+          );
+
+      if (
+        eligible.length ===
+        0
+      ) {
+        return {
+          content: [
+            {
+              text: JSON.stringify(
+                {
+                  status:
+                    "success",
+                  underlying,
+                  spot:
+                    Number(
+                      spot.toFixed(
+                        2
+                      )
+                    ),
+                  expiry:
+                    selectedExpiry,
+                  strategy,
+                  spread_width,
+                  min_otm_pct:
+                    minOtmPct,
+                  max_otm_pct:
+                    maxOtmPct,
+                  lot_size:
+                    lotSize,
+                  candidates: [],
+                  candidate_count:
+                    0,
+                  message:
+                    "No candidate spreads matched the supplied OTM range and spread width.",
+                  read_only:
+                    true,
+                },
+                null,
+                2
+              ),
+              type:
+                "text",
+            },
+          ],
+        };
+      }
+
+      const scanCandidates =
+        eligible
+          .sort(
+            (a, b) =>
+              a.shortOtmPct -
+              b.shortOtmPct
+          )
+          .slice(
+            0,
+            Math.min(
+              50,
+              eligible.length
+            )
+          );
+
+      const quoteParams =
+        new URLSearchParams();
+
+      for (
+        const candidate of
+          scanCandidates
+      ) {
+        quoteParams.append(
+          "i",
+          "NFO:" +
+            candidate
+              .shortContract
+              .tradingsymbol
+        );
+
+        quoteParams.append(
+          "i",
+          "NFO:" +
+            candidate
+              .longContract
+              .tradingsymbol
+        );
+      }
+
+      const quoteData =
+        (await zerodhaGet(
+          "/quote?" +
+            quoteParams.toString(),
+          env
+        )) as any;
+
+      const round2 = (
+        value:
+          number | null
+      ) =>
+        value === null ||
+        !Number.isFinite(
+          value
+        )
+          ? null
+          : Number(
+              value.toFixed(
+                2
+              )
+            );
+
+      const results =
+        scanCandidates.map(
+          (
+            candidate
+          ) => {
+            const shortKey =
+              "NFO:" +
+              candidate
+                .shortContract
+                .tradingsymbol;
+
+            const longKey =
+              "NFO:" +
+              candidate
+                .longContract
+                .tradingsymbol;
+
+            const shortQuote =
+              quoteData?.data?.[
+                shortKey
+              ];
+
+            const longQuote =
+              quoteData?.data?.[
+                longKey
+              ];
+
+            const shortBid =
+              shortQuote
+                ?.depth?.buy?.[0]
+                ?.price ??
+              null;
+
+            const shortAsk =
+              shortQuote
+                ?.depth?.sell?.[0]
+                ?.price ??
+              null;
+
+            const longBid =
+              longQuote
+                ?.depth?.buy?.[0]
+                ?.price ??
+              null;
+
+            const longAsk =
+              longQuote
+                ?.depth?.sell?.[0]
+                ?.price ??
+              null;
+
+            const shortLtp =
+              shortQuote
+                ?.last_price ??
+              null;
+
+            const longLtp =
+              longQuote
+                ?.last_price ??
+              null;
+
+            const executableCredit =
+              shortBid !==
+                null &&
+              longAsk !==
+                null &&
+              shortBid > 0 &&
+              longAsk > 0
+                ? shortBid -
+                  longAsk
+                : null;
+
+            const indicativeCredit =
+              shortLtp !==
+                null &&
+              longLtp !==
+                null
+                ? shortLtp -
+                  longLtp
+                : null;
+
+            const quantity =
+              lotSize;
+
+            const maxProfitPerUnit =
+              executableCredit !==
+                null &&
+              executableCredit >
+                0
+                ? executableCredit
+                : null;
+
+            const maxLossPerUnit =
+              maxProfitPerUnit !==
+                null
+                ? spread_width -
+                  maxProfitPerUnit
+                : null;
+
+            let breakeven =
+              null;
+
+            let beDistance =
+              null;
+
+            let beDistancePct =
+              null;
+
+            if (
+              maxProfitPerUnit !==
+              null
+            ) {
+              breakeven =
+                strategy ===
+                "BPS"
+                  ? candidate
+                      .shortStrike -
+                    maxProfitPerUnit
+                  : candidate
+                      .shortStrike +
+                    maxProfitPerUnit;
+
+              beDistance =
+                strategy ===
+                "BPS"
+                  ? spot -
+                    breakeven
+                  : breakeven -
+                    spot;
+
+              beDistancePct =
+                (
+                  beDistance /
+                  spot
+                ) *
+                100;
+            }
+
+            const sufficientLiveDepth =
+              shortBid !==
+                null &&
+              shortAsk !==
+                null &&
+              longBid !==
+                null &&
+              longAsk !==
+                null &&
+              shortBid > 0 &&
+              shortAsk > 0 &&
+              longBid > 0 &&
+              longAsk > 0;
+
+            let status =
+              "NO_LIVE_DEPTH";
+
+            if (
+              executableCredit !==
+                null &&
+              executableCredit >
+                0
+            ) {
+              status =
+                "EXECUTABLE";
+            } else if (
+              shortBid !==
+                null &&
+              longAsk !==
+                null &&
+              shortBid > 0 &&
+              longAsk > 0
+            ) {
+              status =
+                "NON_POSITIVE_CREDIT";
+            }
+
+            return {
+              short_strike:
+                candidate
+                  .shortStrike,
+              long_strike:
+                candidate
+                  .longStrike,
+              short_strike_otm_pct:
+                round2(
+                  candidate
+                    .shortOtmPct
+                ),
+              short_strike_distance:
+                round2(
+                  strategy ===
+                  "BPS"
+                    ? spot -
+                      candidate
+                        .shortStrike
+                    : candidate
+                        .shortStrike -
+                      spot
+                ),
+              short_strike_distance_pct:
+                round2(
+                  candidate
+                    .shortOtmPct
+                ),
+              short_leg: {
+                symbol:
+                  candidate
+                    .shortContract
+                    .tradingsymbol,
+                ltp:
+                  round2(
+                    shortLtp
+                  ),
+                bid:
+                  round2(
+                    shortBid
+                  ),
+                ask:
+                  round2(
+                    shortAsk
+                  ),
+                bid_quantity:
+                  shortQuote
+                    ?.depth?.buy?.[0]
+                    ?.quantity ??
+                  null,
+                ask_quantity:
+                  shortQuote
+                    ?.depth?.sell?.[0]
+                    ?.quantity ??
+                  null,
+                oi:
+                  shortQuote?.oi ??
+                  null,
+                volume:
+                  shortQuote
+                    ?.volume ??
+                  null,
+              },
+              long_leg: {
+                symbol:
+                  candidate
+                    .longContract
+                    .tradingsymbol,
+                ltp:
+                  round2(
+                    longLtp
+                  ),
+                bid:
+                  round2(
+                    longBid
+                  ),
+                ask:
+                  round2(
+                    longAsk
+                  ),
+                bid_quantity:
+                  longQuote
+                    ?.depth?.buy?.[0]
+                    ?.quantity ??
+                  null,
+                ask_quantity:
+                  longQuote
+                    ?.depth?.sell?.[0]
+                    ?.quantity ??
+                  null,
+                oi:
+                  longQuote?.oi ??
+                  null,
+                volume:
+                  longQuote
+                    ?.volume ??
+                  null,
+              },
+              pricing: {
+                executable_credit:
+                  round2(
+                    executableCredit
+                  ),
+                indicative_credit_ltp:
+                  round2(
+                    indicativeCredit
+                  ),
+                executable:
+                  executableCredit !==
+                    null &&
+                  executableCredit >
+                    0,
+                pricing_method:
+                  "SELL short leg at bid; BUY long leg at ask",
+              },
+              risk: {
+                max_profit_per_unit:
+                  round2(
+                    maxProfitPerUnit
+                  ),
+                max_loss_per_unit:
+                  round2(
+                    maxLossPerUnit
+                  ),
+                max_profit_total:
+                  round2(
+                    maxProfitPerUnit !==
+                      null
+                      ? maxProfitPerUnit *
+                        quantity
+                      : null
+                  ),
+                max_loss_total:
+                  round2(
+                    maxLossPerUnit !==
+                      null
+                      ? maxLossPerUnit *
+                        quantity
+                      : null
+                  ),
+                breakeven:
+                  round2(
+                    breakeven
+                  ),
+                breakeven_distance:
+                  round2(
+                    beDistance
+                  ),
+                breakeven_distance_pct:
+                  round2(
+                    beDistancePct
+                  ),
+                max_profit_to_max_loss_pct:
+                  round2(
+                    maxProfitPerUnit !==
+                      null &&
+                    maxLossPerUnit !==
+                      null &&
+                    maxLossPerUnit >
+                      0
+                      ? (
+                          maxProfitPerUnit /
+                          maxLossPerUnit
+                        ) *
+                        100
+                      : null
+                  ),
+              },
+              liquidity: {
+                sufficient_live_depth:
+                  sufficientLiveDepth,
+              },
+              status,
+              read_only:
+                true,
+            };
+          }
+        );
+
+      const dte =
+        Math.max(
+          0,
+          Math.ceil(
+            (
+              new Date(
+                selectedExpiry +
+                  "T15:30:00+05:30"
+              ).getTime() -
+              Date.now()
+            ) /
+              (
+                24 *
+                60 *
+                60 *
+                1000
+              )
+          )
+        );
+
+      return {
+        content: [
+          {
+            text: JSON.stringify(
+              {
+                status:
+                  "success",
+                underlying,
+                spot:
+                  round2(
+                    spot
+                  ),
+                expiry:
+                  selectedExpiry,
+                strategy,
+                spread_width,
+                dte,
+                lot_size:
+                  lotSize,
+                min_otm_pct:
+                  minOtmPct,
+                max_otm_pct:
+                  maxOtmPct,
+                candidates_scanned:
+                  results.length,
+                candidates_returned:
+                  Math.min(
+                    maxCandidates,
+                    results.length
+                  ),
+                candidates:
+                  results.slice(
+                    0,
+                    maxCandidates
+                  ),
+                read_only:
+                  true,
+              },
+              null,
+              2
+            ),
+            type:
+              "text",
+          },
+        ],
+      };
+    }
+  );
+
+
+  // ==========================================================
   // POSITIONS
   // ==========================================================
 
