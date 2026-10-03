@@ -55,7 +55,9 @@ async function handleZerodhaLogin(
   env: Env
 ): Promise<Response> {
   if (!env.ZERODHA_API_KEY) {
-    return new Response("ZERODHA_API_KEY secret is not configured", { status: 500 });
+    return new Response("ZERODHA_API_KEY secret is not configured", {
+      status: 500,
+    });
   }
 
   const url = new URL(request.url);
@@ -70,7 +72,10 @@ async function handleZerodhaLogin(
 
   if (url.pathname === "/callback") {
     if (!env.ZERODHA_API_SECRET) {
-      return new Response("ZERODHA_API_SECRET secret is not configured", { status: 500 });
+      return new Response(
+        "ZERODHA_API_SECRET secret is not configured",
+        { status: 500 }
+      );
     }
 
     const requestToken = url.searchParams.get("request_token");
@@ -95,25 +100,32 @@ async function handleZerodhaLogin(
       .map((byte) => byte.toString(16).padStart(2, "0"))
       .join("");
 
-    const tokenResponse = await fetch("https://api.kite.trade/session/token", {
-      method: "POST",
-      headers: {
-        "X-Kite-Version": "3",
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({
-        api_key: env.ZERODHA_API_KEY,
-        request_token: requestToken,
-        checksum,
-      }).toString(),
-    });
+    const tokenResponse = await fetch(
+      "https://api.kite.trade/session/token",
+      {
+        method: "POST",
+        headers: {
+          "X-Kite-Version": "3",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          api_key: env.ZERODHA_API_KEY,
+          request_token: requestToken,
+          checksum,
+        }).toString(),
+      }
+    );
 
     const tokenData = await tokenResponse.json();
 
     if (!tokenResponse.ok) {
-      return new Response("Zerodha authentication failed: " + JSON.stringify(tokenData), {
-        status: tokenResponse.status,
-      });
+      return new Response(
+        "Zerodha authentication failed: " +
+          JSON.stringify(tokenData),
+        {
+          status: tokenResponse.status,
+        }
+      );
     }
 
     const accessToken = tokenData?.data?.access_token;
@@ -126,10 +138,15 @@ async function handleZerodhaLogin(
     }
 
     if (env.ZERODHA_TOKEN_STORE) {
-      await env.ZERODHA_TOKEN_STORE.put("access_token", accessToken);
+      await env.ZERODHA_TOKEN_STORE.put(
+        "access_token",
+        accessToken
+      );
+
       await env.ZERODHA_TOKEN_STORE.put(
         "login_time",
-        tokenData?.data?.login_time ?? new Date().toISOString()
+        tokenData?.data?.login_time ??
+          new Date().toISOString()
       );
     }
 
@@ -137,7 +154,9 @@ async function handleZerodhaLogin(
       "Zerodha authentication successful. Your daily trading session is now connected. You can close this window.",
       {
         status: 200,
-        headers: { "Content-Type": "text/plain; charset=utf-8" },
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+        },
       }
     );
   }
@@ -155,81 +174,138 @@ function createServer(env: Env) {
     "hello",
     {
       description: "Basic MCP connectivity test",
-      inputSchema: { name: z.string().optional() },
+      inputSchema: {
+        name: z.string().optional(),
+      },
     },
     async ({ name }) => ({
-      content: [{
-        text: "Hello, " + (name ?? "Vikram") + "! MCP connection is working.",
-        type: "text",
-      }],
+      content: [
+        {
+          text:
+            "Hello, " +
+            (name ?? "Vikram") +
+            "! MCP connection is working.",
+          type: "text",
+        },
+      ],
     })
   );
 
   server.registerTool(
     "zerodha_auth_status",
     {
-      description: "Check whether a Zerodha access token is currently available. Read-only.",
+      description:
+        "Check whether a Zerodha access token is currently available. Read-only.",
     },
     async () => {
-      const token = await getZerodhaAccessToken(env).catch(() => null);
+      const token = await getZerodhaAccessToken(env).catch(
+        () => null
+      );
+
       const loginTime = env.ZERODHA_TOKEN_STORE
         ? await env.ZERODHA_TOKEN_STORE.get("login_time")
         : null;
 
       return {
-        content: [{
-          text: JSON.stringify({ authenticated: Boolean(token), login_time: loginTime }, null, 2),
-          type: "text",
-        }],
+        content: [
+          {
+            text: JSON.stringify(
+              {
+                authenticated: Boolean(token),
+                login_time: loginTime,
+              },
+              null,
+              2
+            ),
+            type: "text",
+          },
+        ],
       };
     }
   );
 
   server.registerTool(
     "zerodha_profile",
-    { description: "Read the authenticated Zerodha account profile. Read-only." },
+    {
+      description:
+        "Read the authenticated Zerodha account profile. Read-only.",
+    },
     async () => ({
-      content: [{
-        text: JSON.stringify(await zerodhaGet("/user/profile", env), null, 2),
-        type: "text",
-      }],
+      content: [
+        {
+          text: JSON.stringify(
+            await zerodhaGet("/user/profile", env),
+            null,
+            2
+          ),
+          type: "text",
+        },
+      ],
     })
   );
 
   server.registerTool(
     "zerodha_margins",
-    { description: "Read current Zerodha funds and margin information. Read-only." },
-    async () => ({
-      content: [{
-        text: JSON.stringify(await zerodhaGet("/user/margins", env), null, 2),
-        type: "text",
-      }],
-    })
-  );
-
-
-  server.registerTool(
-    "zerodha_quote",
     {
-      description: "Read live Zerodha market quotes for one or more exchange-qualified trading symbols. Read-only.",
-      inputSchema: {
-        symbols: z.array(z.string().min(1)).min(1).max(50),
-      },
+      description:
+        "Read current Zerodha funds and margin information. Read-only.",
     },
-    async ({ symbols }) => {
-      const params = new URLSearchParams();
-      for (const symbol of symbols) {
-        params.append("i", symbol);
-      }
-      return {
-        content: [{
+    async () => ({
+      content: [
+        {
           text: JSON.stringify(
-            await zerodhaGet("/quote?" + params.toString(), env),
+            await zerodhaGet("/user/margins", env),
             null,
             2
           ),
           type: "text",
-        }],
+        },
+      ],
+    })
+  );
+
+  server.registerTool(
+    "zerodha_quote",
+    {
+      description:
+        "Read live Zerodha market quotes for one or more exchange-qualified trading symbols. Enter symbols separated by commas. Read-only.",
+      inputSchema: {
+        symbols: z.string().min(1),
+      },
+    },
+    async ({ symbols }) => {
+      const symbolList = symbols
+        .split(",")
+        .map((symbol) => symbol.trim())
+        .filter(Boolean)
+        .slice(0, 50);
+
+      if (symbolList.length === 0) {
+        throw new Error(
+          "At least one trading symbol is required."
+        );
+      }
+
+      const params = new URLSearchParams();
+
+      for (const symbol of symbolList) {
+        params.append("i", symbol);
+      }
+
+      return {
+        content: [
+          {
+            text: JSON.stringify(
+              await zerodhaGet(
+                "/quote?" + params.toString(),
+                env
+              ),
+              null,
+              2
+            ),
+            type: "text",
+          },
+        ],
       };
     }
   );
@@ -237,66 +313,113 @@ function createServer(env: Env) {
   server.registerTool(
     "zerodha_positions",
     {
-      description: "Read current Zerodha day and net positions. Read-only.",
+      description:
+        "Read current Zerodha day and net positions. Read-only.",
     },
     async () => ({
-      content: [{
-        text: JSON.stringify(await zerodhaGet("/portfolio/positions", env), null, 2),
-        type: "text",
-      }],
+      content: [
+        {
+          text: JSON.stringify(
+            await zerodhaGet(
+              "/portfolio/positions",
+              env
+            ),
+            null,
+            2
+          ),
+          type: "text",
+        },
+      ],
     })
   );
 
   server.registerTool(
     "zerodha_holdings",
     {
-      description: "Read current Zerodha equity holdings. Read-only.",
+      description:
+        "Read current Zerodha equity holdings. Read-only.",
     },
     async () => ({
-      content: [{
-        text: JSON.stringify(await zerodhaGet("/portfolio/holdings", env), null, 2),
-        type: "text",
-      }],
+      content: [
+        {
+          text: JSON.stringify(
+            await zerodhaGet(
+              "/portfolio/holdings",
+              env
+            ),
+            null,
+            2
+          ),
+          type: "text",
+        },
+      ],
     })
   );
 
   server.registerTool(
     "zerodha_orders",
     {
-      description: "Read all Zerodha orders for the current trading day. Read-only.",
+      description:
+        "Read all Zerodha orders for the current trading day. Read-only.",
     },
     async () => ({
-      content: [{
-        text: JSON.stringify(await zerodhaGet("/orders", env), null, 2),
-        type: "text",
-      }],
+      content: [
+        {
+          text: JSON.stringify(
+            await zerodhaGet("/orders", env),
+            null,
+            2
+          ),
+          type: "text",
+        },
+      ],
     })
   );
 
   server.registerTool(
     "zerodha_trades",
     {
-      description: "Read all Zerodha trades for the current trading day. Read-only.",
+      description:
+        "Read all Zerodha trades for the current trading day. Read-only.",
     },
     async () => ({
-      content: [{
-        text: JSON.stringify(await zerodhaGet("/trades", env), null, 2),
-        type: "text",
-      }],
+      content: [
+        {
+          text: JSON.stringify(
+            await zerodhaGet("/trades", env),
+            null,
+            2
+          ),
+          type: "text",
+        },
+      ],
     })
   );
 
   server.registerTool(
     "zerodha_order_history",
     {
-      description: "Read the history of a specific Zerodha order. Read-only.",
-      inputSchema: { order_id: z.string() },
+      description:
+        "Read the history of a specific Zerodha order. Read-only.",
+      inputSchema: {
+        order_id: z.string(),
+      },
     },
     async ({ order_id }) => ({
-      content: [{
-        text: JSON.stringify(await zerodhaGet("/orders/" + encodeURIComponent(order_id), env), null, 2),
-        type: "text",
-      }],
+      content: [
+        {
+          text: JSON.stringify(
+            await zerodhaGet(
+              "/orders/" +
+                encodeURIComponent(order_id),
+              env
+            ),
+            null,
+            2
+          ),
+          type: "text",
+        },
+      ],
     })
   );
 
@@ -307,10 +430,15 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    if (url.pathname === "/login" || url.pathname === "/callback") {
+    if (
+      url.pathname === "/login" ||
+      url.pathname === "/callback"
+    ) {
       return handleZerodhaLogin(request, env);
     }
 
-    return createMcpHandler(() => createServer(env))(request, env, ctx);
+    return createMcpHandler(
+      () => createServer(env)
+    )(request, env, ctx);
   },
 } satisfies ExportedHandler<Env>;
