@@ -9,9 +9,9 @@ type Env = {
   ZERODHA_TOKEN_STORE?: KVNamespace;
 };
 
-// ------------------------------------------------------------
+// ============================================================
 // ZERODHA ACCESS TOKEN
-// ------------------------------------------------------------
+// ============================================================
 
 async function getZerodhaAccessToken(
   env: Env
@@ -36,9 +36,9 @@ async function getZerodhaAccessToken(
   );
 }
 
-// ------------------------------------------------------------
+// ============================================================
 // GENERIC ZERODHA GET
-// ------------------------------------------------------------
+// ============================================================
 
 async function zerodhaGet(
   path: string,
@@ -83,9 +83,9 @@ async function zerodhaGet(
   return data;
 }
 
-// ------------------------------------------------------------
+// ============================================================
 // ZERODHA LOGIN / CALLBACK
-// ------------------------------------------------------------
+// ============================================================
 
 async function handleZerodhaLogin(
   request: Request,
@@ -200,8 +200,10 @@ async function handleZerodhaLogin(
             new URLSearchParams({
               api_key:
                 env.ZERODHA_API_KEY,
+
               request_token:
                 requestToken,
+
               checksum,
             }).toString(),
         }
@@ -271,9 +273,9 @@ async function handleZerodhaLogin(
   );
 }
 
-// ------------------------------------------------------------
+// ============================================================
 // CSV PARSER
-// ------------------------------------------------------------
+// ============================================================
 
 function parseCsvLine(
   line: string
@@ -317,9 +319,9 @@ function parseCsvLine(
   return result;
 }
 
-// ------------------------------------------------------------
-// GET NFO INSTRUMENT MASTER
-// ------------------------------------------------------------
+// ============================================================
+// NFO INSTRUMENT MASTER
+// ============================================================
 
 async function getNfoInstrumentMaster(
   env: Env
@@ -420,9 +422,9 @@ async function getNfoInstrumentMaster(
   return instruments;
 }
 
-// ------------------------------------------------------------
+// ============================================================
 // MCP SERVER
-// ------------------------------------------------------------
+// ============================================================
 
 function createServer(
   env: Env
@@ -464,7 +466,7 @@ function createServer(
   );
 
   // ==========================================================
-  // ZERODHA AUTH STATUS
+  // AUTH STATUS
   // ==========================================================
 
   server.registerTool(
@@ -500,12 +502,14 @@ function createServer(
                   Boolean(
                     token
                   ),
+
                 login_time:
                   loginTime,
               },
               null,
               2
             ),
+
             type: "text",
           },
         ],
@@ -514,7 +518,7 @@ function createServer(
   );
 
   // ==========================================================
-  // ZERODHA PROFILE
+  // PROFILE
   // ==========================================================
 
   server.registerTool(
@@ -535,6 +539,7 @@ function createServer(
             null,
             2
           ),
+
           type: "text",
         },
       ],
@@ -542,7 +547,7 @@ function createServer(
   );
 
   // ==========================================================
-  // ZERODHA MARGINS
+  // MARGINS
   // ==========================================================
 
   server.registerTool(
@@ -563,6 +568,7 @@ function createServer(
             null,
             2
           ),
+
           type: "text",
         },
       ],
@@ -570,7 +576,7 @@ function createServer(
   );
 
   // ==========================================================
-  // ZERODHA QUOTE
+  // QUOTE
   // ==========================================================
 
   server.registerTool(
@@ -631,6 +637,7 @@ function createServer(
               null,
               2
             ),
+
             type: "text",
           },
         ],
@@ -639,7 +646,7 @@ function createServer(
   );
 
   // ==========================================================
-  // ZERODHA NFO INSTRUMENT MASTER
+  // INSTRUMENTS
   // ==========================================================
 
   server.registerTool(
@@ -690,6 +697,7 @@ function createServer(
               headers.join(",") +
               "\n" +
               rows.join("\n"),
+
             type: "text",
           },
         ],
@@ -698,7 +706,7 @@ function createServer(
   );
 
   // ==========================================================
-  // ZERODHA OPTION CHAIN
+  // OPTION CHAIN
   // ==========================================================
 
   server.registerTool(
@@ -737,7 +745,7 @@ function createServer(
         20;
 
       // ------------------------------------------------------
-      // 1. Get NFO instrument master
+      // Get instrument master
       // ------------------------------------------------------
 
       const instruments =
@@ -746,7 +754,7 @@ function createServer(
         );
 
       // ------------------------------------------------------
-      // 2. Get underlying spot
+      // Get spot
       // ------------------------------------------------------
 
       const spotSymbol =
@@ -782,7 +790,7 @@ function createServer(
       }
 
       // ------------------------------------------------------
-      // 3. Filter NIFTY / BANKNIFTY options
+      // Filter options
       // ------------------------------------------------------
 
       const optionContracts =
@@ -812,7 +820,7 @@ function createServer(
       }
 
       // ------------------------------------------------------
-      // 4. Determine expiry
+      // Expiry
       // ------------------------------------------------------
 
       const today =
@@ -865,10 +873,6 @@ function createServer(
         );
       }
 
-      // ------------------------------------------------------
-      // 5. Filter selected expiry
-      // ------------------------------------------------------
-
       const expiryContracts =
         optionContracts.filter(
           (instrument) =>
@@ -877,7 +881,7 @@ function createServer(
         );
 
       // ------------------------------------------------------
-      // 6. Get available strikes
+      // Strikes
       // ------------------------------------------------------
 
       const strikes = [
@@ -913,7 +917,7 @@ function createServer(
       }
 
       // ------------------------------------------------------
-      // 7. Find ATM
+      // ATM
       // ------------------------------------------------------
 
       let nearestIndex = 0;
@@ -945,7 +949,7 @@ function createServer(
       }
 
       // ------------------------------------------------------
-      // 8. Select strikes around ATM
+      // Select strikes
       // ------------------------------------------------------
 
       const startIndex =
@@ -970,7 +974,7 @@ function createServer(
         );
 
       // ------------------------------------------------------
-      // 9. Map CE / PE contracts
+      // Map contracts
       // ------------------------------------------------------
 
       const contractsByStrike =
@@ -1040,7 +1044,7 @@ function createServer(
       }
 
       // ------------------------------------------------------
-      // 10. Build quote symbols
+      // Quote symbols
       // ------------------------------------------------------
 
       const quoteSymbols:
@@ -1082,7 +1086,7 @@ function createServer(
       }
 
       // ------------------------------------------------------
-      // 11. Get live quotes including depth
+      // Get quotes
       // ------------------------------------------------------
 
       const quoteParams =
@@ -1106,7 +1110,7 @@ function createServer(
         )) as any;
 
       // ------------------------------------------------------
-      // 12. Build final option chain
+      // Build chain
       // ------------------------------------------------------
 
       const chain =
@@ -1147,10 +1151,6 @@ function createServer(
                     ]
                 : null;
 
-            // ------------------------------------------------
-            // CE DEPTH
-            // ------------------------------------------------
-
             const ceBid =
               ceQuote
                 ?.depth?.buy?.[0]
@@ -1181,10 +1181,6 @@ function createServer(
                     ).toFixed(2)
                   )
                 : null;
-
-            // ------------------------------------------------
-            // PE DEPTH
-            // ------------------------------------------------
 
             const peBid =
               peQuote
@@ -1219,10 +1215,6 @@ function createServer(
 
             return {
               strike,
-
-              // ==================================================
-              // CALL
-              // ==================================================
 
               CE: entry?.CE
                 ? {
@@ -1281,10 +1273,6 @@ function createServer(
                       null,
                   }
                 : null,
-
-              // ==================================================
-              // PUT
-              // ==================================================
 
               PE: entry?.PE
                 ? {
@@ -1347,17 +1335,15 @@ function createServer(
           }
         );
 
-      // ------------------------------------------------------
-      // 13. Return result
-      // ------------------------------------------------------
-
       return {
         content: [
           {
             text: JSON.stringify(
               {
                 underlying,
+
                 spot,
+
                 expiry:
                   selectedExpiry,
 
@@ -1386,7 +1372,840 @@ function createServer(
   );
 
   // ==========================================================
-  // ZERODHA POSITIONS
+  // OPTION ANALYSIS
+  // ==========================================================
+
+  server.registerTool(
+    "zerodha_option_analysis",
+    {
+      description:
+        "Analyse the live NIFTY or BANKNIFTY option chain. Returns spot, expiry, DTE, ATM and derived CE/PE metrics including moneyness, distance from spot, OTM percentage, mid price, bid-ask spread, spread percentage, intrinsic value and time value. Read-only.",
+
+      inputSchema: {
+        underlying:
+          z.enum([
+            "NIFTY",
+            "BANKNIFTY",
+          ]),
+
+        expiry:
+          z.string().optional(),
+
+        strikes_each_side:
+          z
+            .number()
+            .int()
+            .min(5)
+            .max(50)
+            .optional(),
+      },
+    },
+
+    async ({
+      underlying,
+      expiry,
+      strikes_each_side,
+    }) => {
+      // ------------------------------------------------------
+      // 1. Instrument master
+      // ------------------------------------------------------
+
+      const instruments =
+        await getNfoInstrumentMaster(
+          env
+        );
+
+      // ------------------------------------------------------
+      // 2. Spot
+      // ------------------------------------------------------
+
+      const spotSymbol =
+        underlying ===
+        "NIFTY"
+          ? "NSE:NIFTY 50"
+          : "NSE:NIFTY BANK";
+
+      const spotData =
+        (await zerodhaGet(
+          "/quote?" +
+            new URLSearchParams({
+              i: spotSymbol,
+            }).toString(),
+          env
+        )) as any;
+
+      const spot =
+        spotData?.data?.[
+          spotSymbol
+        ]?.last_price;
+
+      if (
+        typeof spot !==
+          "number" ||
+        spot <= 0
+      ) {
+        throw new Error(
+          "Unable to obtain live " +
+            underlying +
+            " spot price."
+        );
+      }
+
+      // ------------------------------------------------------
+      // 3. Filter options
+      // ------------------------------------------------------
+
+      const optionContracts =
+        instruments.filter(
+          (instrument) =>
+            instrument.name ===
+              underlying &&
+            instrument.segment ===
+              "NFO-OPT" &&
+            (
+              instrument.instrument_type ===
+                "CE" ||
+              instrument.instrument_type ===
+                "PE"
+            )
+        );
+
+      if (
+        optionContracts.length ===
+        0
+      ) {
+        throw new Error(
+          "No option contracts found for " +
+            underlying +
+            "."
+        );
+      }
+
+      // ------------------------------------------------------
+      // 4. Expiry
+      // ------------------------------------------------------
+
+      const today =
+        new Date()
+          .toISOString()
+          .slice(0, 10);
+
+      const expiryList = [
+        ...new Set(
+          optionContracts.map(
+            (instrument) =>
+              instrument.expiry
+          )
+        ),
+      ]
+        .filter(
+          (date) =>
+            date >= today
+        )
+        .sort();
+
+      if (
+        expiryList.length === 0
+      ) {
+        throw new Error(
+          "No current or future expiry found for " +
+            underlying +
+            "."
+        );
+      }
+
+      const selectedExpiry =
+        !expiry ||
+        expiry === "nearest"
+          ? expiryList[0]
+          : expiry;
+
+      if (
+        !expiryList.includes(
+          selectedExpiry
+        )
+      ) {
+        throw new Error(
+          "Invalid expiry " +
+            selectedExpiry +
+            ". Available expiries: " +
+            expiryList
+              .slice(0, 10)
+              .join(", ")
+        );
+      }
+
+      // ------------------------------------------------------
+      // 5. DTE
+      // ------------------------------------------------------
+
+      const expiryDate =
+        new Date(
+          selectedExpiry +
+            "T15:30:00+05:30"
+        );
+
+      const now =
+        new Date();
+
+      const millisecondsPerDay =
+        24 *
+        60 *
+        60 *
+        1000;
+
+      const dte = Math.max(
+        0,
+        Math.ceil(
+          (
+            expiryDate.getTime() -
+            now.getTime()
+          ) /
+            millisecondsPerDay
+        )
+      );
+
+      // ------------------------------------------------------
+      // 6. Strikes
+      // ------------------------------------------------------
+
+      const expiryContracts =
+        optionContracts.filter(
+          (instrument) =>
+            instrument.expiry ===
+            selectedExpiry
+        );
+
+      const strikes = [
+        ...new Set(
+          expiryContracts
+            .map(
+              (instrument) =>
+                Number(
+                  instrument.strike
+                )
+            )
+            .filter(
+              (strike) =>
+                Number.isFinite(
+                  strike
+                ) &&
+                strike > 0
+            )
+        ),
+      ].sort(
+        (a, b) =>
+          a - b
+      );
+
+      if (
+        strikes.length === 0
+      ) {
+        throw new Error(
+          "No strikes found for expiry " +
+            selectedExpiry +
+            "."
+        );
+      }
+
+      // ------------------------------------------------------
+      // 7. ATM
+      // ------------------------------------------------------
+
+      let atm =
+        strikes[0];
+
+      let nearestDistance =
+        Math.abs(
+          atm - spot
+        );
+
+      for (
+        const strike of
+          strikes
+      ) {
+        const distance =
+          Math.abs(
+            strike - spot
+          );
+
+        if (
+          distance <
+          nearestDistance
+        ) {
+          nearestDistance =
+            distance;
+
+          atm =
+            strike;
+        }
+      }
+
+      // ------------------------------------------------------
+      // 8. Select strikes
+      // ------------------------------------------------------
+
+      const strikeCount =
+        strikes_each_side ??
+        20;
+
+      const atmIndex =
+        strikes.indexOf(
+          atm
+        );
+
+      const startIndex =
+        Math.max(
+          0,
+          atmIndex -
+            strikeCount
+        );
+
+      const endIndex =
+        Math.min(
+          strikes.length,
+          atmIndex +
+            strikeCount +
+            1
+        );
+
+      const selectedStrikes =
+        strikes.slice(
+          startIndex,
+          endIndex
+        );
+
+      // ------------------------------------------------------
+      // 9. Map contracts
+      // ------------------------------------------------------
+
+      const contractsByStrike =
+        new Map<
+          number,
+          {
+            CE?: Record<
+              string,
+              string
+            >;
+
+            PE?: Record<
+              string,
+              string
+            >;
+          }
+        >();
+
+      for (
+        const instrument of
+          expiryContracts
+      ) {
+        const strike =
+          Number(
+            instrument.strike
+          );
+
+        if (
+          !selectedStrikes.includes(
+            strike
+          )
+        ) {
+          continue;
+        }
+
+        if (
+          !contractsByStrike.has(
+            strike
+          )
+        ) {
+          contractsByStrike.set(
+            strike,
+            {}
+          );
+        }
+
+        const entry =
+          contractsByStrike.get(
+            strike
+          )!;
+
+        if (
+          instrument.instrument_type ===
+          "CE"
+        ) {
+          entry.CE =
+            instrument;
+        }
+
+        if (
+          instrument.instrument_type ===
+          "PE"
+        ) {
+          entry.PE =
+            instrument;
+        }
+      }
+
+      // ------------------------------------------------------
+      // 10. Quote symbols
+      // ------------------------------------------------------
+
+      const quoteSymbols:
+        string[] = [];
+
+      for (
+        const strike of
+          selectedStrikes
+      ) {
+        const entry =
+          contractsByStrike.get(
+            strike
+          );
+
+        if (entry?.CE) {
+          quoteSymbols.push(
+            "NFO:" +
+              entry.CE
+                .tradingsymbol
+          );
+        }
+
+        if (entry?.PE) {
+          quoteSymbols.push(
+            "NFO:" +
+              entry.PE
+                .tradingsymbol
+          );
+        }
+      }
+
+      // ------------------------------------------------------
+      // 11. Live quotes
+      // ------------------------------------------------------
+
+      const quoteParams =
+        new URLSearchParams();
+
+      for (
+        const symbol of
+          quoteSymbols
+      ) {
+        quoteParams.append(
+          "i",
+          symbol
+        );
+      }
+
+      const quoteData =
+        (await zerodhaGet(
+          "/quote?" +
+            quoteParams.toString(),
+          env
+        )) as any;
+
+      // ------------------------------------------------------
+      // 12. Option analytics helper
+      // ------------------------------------------------------
+
+      function analyseOption(
+        quote: any,
+        strike: number,
+        type: "CE" | "PE"
+      ) {
+        const ltp =
+          quote?.last_price ??
+          null;
+
+        const bid =
+          quote
+            ?.depth?.buy?.[0]
+            ?.price ?? null;
+
+        const ask =
+          quote
+            ?.depth?.sell?.[0]
+            ?.price ?? null;
+
+        const bidQuantity =
+          quote
+            ?.depth?.buy?.[0]
+            ?.quantity ?? null;
+
+        const askQuantity =
+          quote
+            ?.depth?.sell?.[0]
+            ?.quantity ?? null;
+
+        const midPrice =
+          bid !== null &&
+          ask !== null &&
+          bid > 0 &&
+          ask > 0
+            ? Number(
+                (
+                  (bid + ask) /
+                  2
+                ).toFixed(2)
+              )
+            : null;
+
+        const spread =
+          bid !== null &&
+          ask !== null &&
+          bid > 0 &&
+          ask > 0
+            ? Number(
+                (
+                  ask - bid
+                ).toFixed(2)
+              )
+            : null;
+
+        const spreadPct =
+          midPrice !== null &&
+          midPrice > 0 &&
+          spread !== null
+            ? Number(
+                (
+                  (spread /
+                    midPrice) *
+                  100
+                ).toFixed(2)
+              )
+            : null;
+
+        // ----------------------------------------------------
+        // Intrinsic value
+        // ----------------------------------------------------
+
+        let intrinsicValue =
+          0;
+
+        if (
+          type === "CE"
+        ) {
+          intrinsicValue =
+            Math.max(
+              0,
+              spot - strike
+            );
+        } else {
+          intrinsicValue =
+            Math.max(
+              0,
+              strike - spot
+            );
+        }
+
+        // ----------------------------------------------------
+        // Time value
+        // ----------------------------------------------------
+
+        const timeValue =
+          ltp !== null
+            ? Number(
+                Math.max(
+                  0,
+                  ltp -
+                    intrinsicValue
+                ).toFixed(2)
+              )
+            : null;
+
+        // ----------------------------------------------------
+        // Moneyness
+        // ----------------------------------------------------
+
+        let moneyness:
+          | "ITM"
+          | "ATM"
+          | "OTM";
+
+        if (
+          Math.abs(
+            strike - atm
+          ) < 0.000001
+        ) {
+          moneyness =
+            "ATM";
+        } else if (
+          type === "CE"
+        ) {
+          moneyness =
+            strike < spot
+              ? "ITM"
+              : "OTM";
+        } else {
+          moneyness =
+            strike > spot
+              ? "ITM"
+              : "OTM";
+        }
+
+        // ----------------------------------------------------
+        // Distance
+        // ----------------------------------------------------
+
+        const distanceFromSpot =
+          Number(
+            (
+              strike -
+              spot
+            ).toFixed(2)
+          );
+
+        const distancePct =
+          Number(
+            (
+              (
+                (
+                  strike -
+                  spot
+                ) /
+                spot
+              ) *
+              100
+            ).toFixed(2)
+          );
+
+        // ----------------------------------------------------
+        // OTM %
+        // ----------------------------------------------------
+
+        let otmPct =
+          0;
+
+        if (
+          type === "CE"
+        ) {
+          otmPct =
+            strike > spot
+              ? Number(
+                  (
+                    (
+                      (
+                        strike -
+                        spot
+                      ) /
+                      spot
+                    ) *
+                    100
+                  ).toFixed(2)
+                )
+              : 0;
+        } else {
+          otmPct =
+            strike < spot
+              ? Number(
+                  (
+                    (
+                      (
+                        spot -
+                        strike
+                      ) /
+                      spot
+                    ) *
+                    100
+                  ).toFixed(2)
+                )
+              : 0;
+        }
+
+        return {
+          ltp,
+
+          bid,
+
+          bid_quantity:
+            bidQuantity,
+
+          ask,
+
+          ask_quantity:
+            askQuantity,
+
+          mid_price:
+            midPrice,
+
+          spread,
+
+          spread_pct:
+            spreadPct,
+
+          moneyness,
+
+          distance_from_spot:
+            distanceFromSpot,
+
+          distance_pct:
+            distancePct,
+
+          otm_pct:
+            otmPct,
+
+          intrinsic_value:
+            Number(
+              intrinsicValue.toFixed(
+                2
+              )
+            ),
+
+          time_value:
+            timeValue,
+
+          oi:
+            quote?.oi ??
+            null,
+
+          volume:
+            quote?.volume ??
+            null,
+
+          oi_day_high:
+            quote
+              ?.oi_day_high ??
+            null,
+
+          oi_day_low:
+            quote
+              ?.oi_day_low ??
+            null,
+
+          net_change:
+            quote
+              ?.net_change ??
+            null,
+        };
+      }
+
+      // ------------------------------------------------------
+      // 13. Build analysed chain
+      // ------------------------------------------------------
+
+      const chain =
+        selectedStrikes.map(
+          (strike) => {
+            const entry =
+              contractsByStrike.get(
+                strike
+              );
+
+            const ceSymbol =
+              entry?.CE
+                ? "NFO:" +
+                  entry.CE
+                    .tradingsymbol
+                : null;
+
+            const peSymbol =
+              entry?.PE
+                ? "NFO:" +
+                  entry.PE
+                    .tradingsymbol
+                : null;
+
+            const ceQuote =
+              ceSymbol
+                ? quoteData
+                    ?.data?.[
+                      ceSymbol
+                    ]
+                : null;
+
+            const peQuote =
+              peSymbol
+                ? quoteData
+                    ?.data?.[
+                      peSymbol
+                    ]
+                : null;
+
+            return {
+              strike,
+
+              CE: entry?.CE
+                ? {
+                    symbol:
+                      entry.CE
+                        .tradingsymbol,
+
+                    instrument_token:
+                      Number(
+                        entry.CE
+                          .instrument_token
+                      ),
+
+                    ...analyseOption(
+                      ceQuote,
+                      strike,
+                      "CE"
+                    ),
+                  }
+                : null,
+
+              PE: entry?.PE
+                ? {
+                    symbol:
+                      entry.PE
+                        .tradingsymbol,
+
+                    instrument_token:
+                      Number(
+                        entry.PE
+                          .instrument_token
+                      ),
+
+                    ...analyseOption(
+                      peQuote,
+                      strike,
+                      "PE"
+                    ),
+                  }
+                : null,
+            };
+          }
+        );
+
+      // ------------------------------------------------------
+      // 14. Return analysis
+      // ------------------------------------------------------
+
+      return {
+        content: [
+          {
+            text: JSON.stringify(
+              {
+                underlying,
+
+                spot,
+
+                expiry:
+                  selectedExpiry,
+
+                dte,
+
+                atm,
+
+                strikes_each_side:
+                  strikeCount,
+
+                contracts:
+                  chain.length,
+
+                chain,
+              },
+              null,
+              2
+            ),
+
+            type: "text",
+          },
+        ],
+      };
+    }
+  );
+
+  // ==========================================================
+  // POSITIONS
   // ==========================================================
 
   server.registerTool(
@@ -1407,6 +2226,7 @@ function createServer(
             null,
             2
           ),
+
           type: "text",
         },
       ],
@@ -1414,7 +2234,7 @@ function createServer(
   );
 
   // ==========================================================
-  // ZERODHA HOLDINGS
+  // HOLDINGS
   // ==========================================================
 
   server.registerTool(
@@ -1435,6 +2255,7 @@ function createServer(
             null,
             2
           ),
+
           type: "text",
         },
       ],
@@ -1442,7 +2263,7 @@ function createServer(
   );
 
   // ==========================================================
-  // ZERODHA ORDERS
+  // ORDERS
   // ==========================================================
 
   server.registerTool(
@@ -1463,6 +2284,7 @@ function createServer(
             null,
             2
           ),
+
           type: "text",
         },
       ],
@@ -1470,7 +2292,7 @@ function createServer(
   );
 
   // ==========================================================
-  // ZERODHA TRADES
+  // TRADES
   // ==========================================================
 
   server.registerTool(
@@ -1491,6 +2313,7 @@ function createServer(
             null,
             2
           ),
+
           type: "text",
         },
       ],
@@ -1498,7 +2321,7 @@ function createServer(
   );
 
   // ==========================================================
-  // ZERODHA ORDER HISTORY
+  // ORDER HISTORY
   // ==========================================================
 
   server.registerTool(
@@ -1529,6 +2352,7 @@ function createServer(
             null,
             2
           ),
+
           type: "text",
         },
       ],
