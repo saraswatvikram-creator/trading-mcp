@@ -9,10 +9,22 @@ type Env = {
   ZERODHA_TOKEN_STORE?: KVNamespace;
 };
 
-async function getZerodhaAccessToken(env: Env): Promise<string> {
+// ------------------------------------------------------------
+// ZERODHA ACCESS TOKEN
+// ------------------------------------------------------------
+
+async function getZerodhaAccessToken(
+  env: Env
+): Promise<string> {
   if (env.ZERODHA_TOKEN_STORE) {
-    const stored = await env.ZERODHA_TOKEN_STORE.get("access_token");
-    if (stored) return stored;
+    const stored =
+      await env.ZERODHA_TOKEN_STORE.get(
+        "access_token"
+      );
+
+    if (stored) {
+      return stored;
+    }
   }
 
   if (env.ZERODHA_ACCESS_TOKEN) {
@@ -23,6 +35,10 @@ async function getZerodhaAccessToken(env: Env): Promise<string> {
     "No Zerodha access token is available. Open /login to authenticate."
   );
 }
+
+// ------------------------------------------------------------
+// GENERIC ZERODHA GET
+// ------------------------------------------------------------
 
 async function zerodhaGet(
   path: string,
@@ -52,7 +68,8 @@ async function zerodhaGet(
     }
   );
 
-  const data = await response.json();
+  const data =
+    await response.json();
 
   if (!response.ok) {
     throw new Error(
@@ -66,6 +83,10 @@ async function zerodhaGet(
   return data;
 }
 
+// ------------------------------------------------------------
+// ZERODHA LOGIN / CALLBACK
+// ------------------------------------------------------------
+
 async function handleZerodhaLogin(
   request: Request,
   env: Env
@@ -73,13 +94,22 @@ async function handleZerodhaLogin(
   if (!env.ZERODHA_API_KEY) {
     return new Response(
       "ZERODHA_API_KEY secret is not configured",
-      { status: 500 }
+      {
+        status: 500,
+      }
     );
   }
 
-  const url = new URL(request.url);
+  const url =
+    new URL(request.url);
 
-  if (url.pathname === "/login") {
+  // ----------------------------------------------------------
+  // LOGIN
+  // ----------------------------------------------------------
+
+  if (
+    url.pathname === "/login"
+  ) {
     const loginUrl =
       "https://kite.zerodha.com/connect/login?v=3&api_key=" +
       encodeURIComponent(
@@ -92,11 +122,19 @@ async function handleZerodhaLogin(
     );
   }
 
-  if (url.pathname === "/callback") {
+  // ----------------------------------------------------------
+  // CALLBACK
+  // ----------------------------------------------------------
+
+  if (
+    url.pathname === "/callback"
+  ) {
     if (!env.ZERODHA_API_SECRET) {
       return new Response(
         "ZERODHA_API_SECRET secret is not configured",
-        { status: 500 }
+        {
+          status: 500,
+        }
       );
     }
 
@@ -116,7 +154,9 @@ async function handleZerodhaLogin(
     ) {
       return new Response(
         "Zerodha login was not completed successfully. Please start again at /login.",
-        { status: 400 }
+        {
+          status: 400,
+        }
       );
     }
 
@@ -189,7 +229,9 @@ async function handleZerodhaLogin(
     if (!accessToken) {
       return new Response(
         "Zerodha authentication succeeded but no access token was returned.",
-        { status: 502 }
+        {
+          status: 502,
+        }
       );
     }
 
@@ -223,7 +265,9 @@ async function handleZerodhaLogin(
 
   return new Response(
     "Not found",
-    { status: 404 }
+    {
+      status: 404,
+    }
   );
 }
 
@@ -274,12 +318,14 @@ function parseCsvLine(
 }
 
 // ------------------------------------------------------------
-// NFO INSTRUMENT MASTER
+// GET NFO INSTRUMENT MASTER
 // ------------------------------------------------------------
 
 async function getNfoInstrumentMaster(
   env: Env
-): Promise<Record<string, string>[]> {
+): Promise<
+  Record<string, string>[]
+> {
   if (!env.ZERODHA_API_KEY) {
     throw new Error(
       "ZERODHA_API_KEY secret is not configured"
@@ -387,9 +433,9 @@ function createServer(
       version: "1.0.0",
     });
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // HELLO
-  // ----------------------------------------------------------
+  // ==========================================================
 
   server.registerTool(
     "hello",
@@ -417,9 +463,9 @@ function createServer(
     })
   );
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // ZERODHA AUTH STATUS
-  // ----------------------------------------------------------
+  // ==========================================================
 
   server.registerTool(
     "zerodha_auth_status",
@@ -467,9 +513,9 @@ function createServer(
     }
   );
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // ZERODHA PROFILE
-  // ----------------------------------------------------------
+  // ==========================================================
 
   server.registerTool(
     "zerodha_profile",
@@ -495,9 +541,9 @@ function createServer(
     })
   );
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // ZERODHA MARGINS
-  // ----------------------------------------------------------
+  // ==========================================================
 
   server.registerTool(
     "zerodha_margins",
@@ -523,9 +569,9 @@ function createServer(
     })
   );
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // ZERODHA QUOTE
-  // ----------------------------------------------------------
+  // ==========================================================
 
   server.registerTool(
     "zerodha_quote",
@@ -592,9 +638,9 @@ function createServer(
     }
   );
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // ZERODHA NFO INSTRUMENT MASTER
-  // ----------------------------------------------------------
+  // ==========================================================
 
   server.registerTool(
     "zerodha_instruments",
@@ -651,15 +697,15 @@ function createServer(
     }
   );
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // ZERODHA OPTION CHAIN
-  // ----------------------------------------------------------
+  // ==========================================================
 
   server.registerTool(
     "zerodha_option_chain",
     {
       description:
-        "Build a live NIFTY or BANKNIFTY option chain from Zerodha instrument metadata and live quotes. Returns expiry, spot, ATM, strikes, CE/PE symbols, LTP, OI, volume and OI day high/low. Read-only.",
+        "Build a live NIFTY or BANKNIFTY option chain from Zerodha instrument metadata and live quotes. Returns expiry, spot, ATM, strikes, CE/PE symbols, LTP, bid, ask, bid/ask quantities, bid-ask spread, OI, volume and OI day high/low. Read-only.",
 
       inputSchema: {
         underlying:
@@ -691,7 +737,7 @@ function createServer(
         20;
 
       // ------------------------------------------------------
-      // 1. Instrument master
+      // 1. Get NFO instrument master
       // ------------------------------------------------------
 
       const instruments =
@@ -700,7 +746,7 @@ function createServer(
         );
 
       // ------------------------------------------------------
-      // 2. Underlying spot
+      // 2. Get underlying spot
       // ------------------------------------------------------
 
       const spotSymbol =
@@ -736,7 +782,7 @@ function createServer(
       }
 
       // ------------------------------------------------------
-      // 3. Filter options
+      // 3. Filter NIFTY / BANKNIFTY options
       // ------------------------------------------------------
 
       const optionContracts =
@@ -766,7 +812,7 @@ function createServer(
       }
 
       // ------------------------------------------------------
-      // 4. Expiries
+      // 4. Determine expiry
       // ------------------------------------------------------
 
       const today =
@@ -820,7 +866,7 @@ function createServer(
       }
 
       // ------------------------------------------------------
-      // 5. Contracts for selected expiry
+      // 5. Filter selected expiry
       // ------------------------------------------------------
 
       const expiryContracts =
@@ -831,7 +877,7 @@ function createServer(
         );
 
       // ------------------------------------------------------
-      // 6. Available strikes
+      // 6. Get available strikes
       // ------------------------------------------------------
 
       const strikes = [
@@ -871,6 +917,7 @@ function createServer(
       // ------------------------------------------------------
 
       let nearestIndex = 0;
+
       let nearestDistance =
         Infinity;
 
@@ -923,7 +970,7 @@ function createServer(
         );
 
       // ------------------------------------------------------
-      // 9. Map CE / PE
+      // 9. Map CE / PE contracts
       // ------------------------------------------------------
 
       const contractsByStrike =
@@ -934,6 +981,7 @@ function createServer(
               string,
               string
             >;
+
             PE?: Record<
               string,
               string
@@ -992,7 +1040,7 @@ function createServer(
       }
 
       // ------------------------------------------------------
-      // 10. Quote symbols
+      // 10. Build quote symbols
       // ------------------------------------------------------
 
       const quoteSymbols:
@@ -1034,7 +1082,7 @@ function createServer(
       }
 
       // ------------------------------------------------------
-      // 11. Live quotes
+      // 11. Get live quotes including depth
       // ------------------------------------------------------
 
       const quoteParams =
@@ -1058,7 +1106,7 @@ function createServer(
         )) as any;
 
       // ------------------------------------------------------
-      // 12. Build chain
+      // 12. Build final option chain
       // ------------------------------------------------------
 
       const chain =
@@ -1099,8 +1147,82 @@ function createServer(
                     ]
                 : null;
 
+            // ------------------------------------------------
+            // CE DEPTH
+            // ------------------------------------------------
+
+            const ceBid =
+              ceQuote
+                ?.depth?.buy?.[0]
+                ?.price ?? null;
+
+            const ceBidQuantity =
+              ceQuote
+                ?.depth?.buy?.[0]
+                ?.quantity ?? null;
+
+            const ceAsk =
+              ceQuote
+                ?.depth?.sell?.[0]
+                ?.price ?? null;
+
+            const ceAskQuantity =
+              ceQuote
+                ?.depth?.sell?.[0]
+                ?.quantity ?? null;
+
+            const ceBidAskSpread =
+              ceBid !== null &&
+              ceAsk !== null
+                ? Number(
+                    (
+                      ceAsk -
+                      ceBid
+                    ).toFixed(2)
+                  )
+                : null;
+
+            // ------------------------------------------------
+            // PE DEPTH
+            // ------------------------------------------------
+
+            const peBid =
+              peQuote
+                ?.depth?.buy?.[0]
+                ?.price ?? null;
+
+            const peBidQuantity =
+              peQuote
+                ?.depth?.buy?.[0]
+                ?.quantity ?? null;
+
+            const peAsk =
+              peQuote
+                ?.depth?.sell?.[0]
+                ?.price ?? null;
+
+            const peAskQuantity =
+              peQuote
+                ?.depth?.sell?.[0]
+                ?.quantity ?? null;
+
+            const peBidAskSpread =
+              peBid !== null &&
+              peAsk !== null
+                ? Number(
+                    (
+                      peAsk -
+                      peBid
+                    ).toFixed(2)
+                  )
+                : null;
+
             return {
               strike,
+
+              // ==================================================
+              // CALL
+              // ==================================================
 
               CE: entry?.CE
                 ? {
@@ -1119,12 +1241,28 @@ function createServer(
                         ?.last_price ??
                       null,
 
+                    bid:
+                      ceBid,
+
+                    bid_quantity:
+                      ceBidQuantity,
+
+                    ask:
+                      ceAsk,
+
+                    ask_quantity:
+                      ceAskQuantity,
+
+                    bid_ask_spread:
+                      ceBidAskSpread,
+
                     oi:
                       ceQuote?.oi ??
                       null,
 
                     volume:
-                      ceQuote?.volume ??
+                      ceQuote
+                        ?.volume ??
                       null,
 
                     oi_day_high:
@@ -1144,6 +1282,10 @@ function createServer(
                   }
                 : null,
 
+              // ==================================================
+              // PUT
+              // ==================================================
+
               PE: entry?.PE
                 ? {
                     symbol:
@@ -1161,12 +1303,28 @@ function createServer(
                         ?.last_price ??
                       null,
 
+                    bid:
+                      peBid,
+
+                    bid_quantity:
+                      peBidQuantity,
+
+                    ask:
+                      peAsk,
+
+                    ask_quantity:
+                      peAskQuantity,
+
+                    bid_ask_spread:
+                      peBidAskSpread,
+
                     oi:
                       peQuote?.oi ??
                       null,
 
                     volume:
-                      peQuote?.volume ??
+                      peQuote
+                        ?.volume ??
                       null,
 
                     oi_day_high:
@@ -1190,7 +1348,7 @@ function createServer(
         );
 
       // ------------------------------------------------------
-      // 13. Return compact result
+      // 13. Return result
       // ------------------------------------------------------
 
       return {
@@ -1202,19 +1360,24 @@ function createServer(
                 spot,
                 expiry:
                   selectedExpiry,
+
                 atm:
                   strikes[
                     nearestIndex
                   ],
+
                 strikes_each_side:
                   strikeCount,
+
                 contracts:
                   chain.length,
+
                 chain,
               },
               null,
               2
             ),
+
             type: "text",
           },
         ],
@@ -1222,9 +1385,9 @@ function createServer(
     }
   );
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // ZERODHA POSITIONS
-  // ----------------------------------------------------------
+  // ==========================================================
 
   server.registerTool(
     "zerodha_positions",
@@ -1250,9 +1413,9 @@ function createServer(
     })
   );
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // ZERODHA HOLDINGS
-  // ----------------------------------------------------------
+  // ==========================================================
 
   server.registerTool(
     "zerodha_holdings",
@@ -1278,9 +1441,9 @@ function createServer(
     })
   );
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // ZERODHA ORDERS
-  // ----------------------------------------------------------
+  // ==========================================================
 
   server.registerTool(
     "zerodha_orders",
@@ -1306,9 +1469,9 @@ function createServer(
     })
   );
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // ZERODHA TRADES
-  // ----------------------------------------------------------
+  // ==========================================================
 
   server.registerTool(
     "zerodha_trades",
@@ -1334,9 +1497,9 @@ function createServer(
     })
   );
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // ZERODHA ORDER HISTORY
-  // ----------------------------------------------------------
+  // ==========================================================
 
   server.registerTool(
     "zerodha_order_history",
@@ -1375,9 +1538,9 @@ function createServer(
   return server;
 }
 
-// ------------------------------------------------------------
+// ============================================================
 // WORKER ENTRY POINT
-// ------------------------------------------------------------
+// ============================================================
 
 export default {
   async fetch(
