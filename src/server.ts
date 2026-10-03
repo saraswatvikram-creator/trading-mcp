@@ -207,6 +207,73 @@ function createServer(env: Env) {
     })
   );
 
+
+  server.registerTool(
+    "zerodha_positions",
+    {
+      description: "Read current Zerodha day and net positions. Read-only.",
+    },
+    async () => ({
+      content: [{
+        text: JSON.stringify(await zerodhaGet("/portfolio/positions", env), null, 2),
+        type: "text",
+      }],
+    })
+  );
+
+  server.registerTool(
+    "zerodha_holdings",
+    {
+      description: "Read current Zerodha equity holdings. Read-only.",
+    },
+    async () => ({
+      content: [{
+        text: JSON.stringify(await zerodhaGet("/portfolio/holdings", env), null, 2),
+        type: "text",
+      }],
+    })
+  );
+
+  server.registerTool(
+    "zerodha_orders",
+    {
+      description: "Read all Zerodha orders for the current trading day. Read-only.",
+    },
+    async () => ({
+      content: [{
+        text: JSON.stringify(await zerodhaGet("/orders", env), null, 2),
+        type: "text",
+      }],
+    })
+  );
+
+  server.registerTool(
+    "zerodha_trades",
+    {
+      description: "Read all Zerodha trades for the current trading day. Read-only.",
+    },
+    async () => ({
+      content: [{
+        text: JSON.stringify(await zerodhaGet("/trades", env), null, 2),
+        type: "text",
+      }],
+    })
+  );
+
+  server.registerTool(
+    "zerodha_order_history",
+    {
+      description: "Read the history of a specific Zerodha order. Read-only.",
+      inputSchema: { order_id: z.string() },
+    },
+    async ({ order_id }) => ({
+      content: [{
+        text: JSON.stringify(await zerodhaGet("/orders/" + encodeURIComponent(order_id), env), null, 2),
+        type: "text",
+      }],
+    })
+  );
+
   return server;
 }
 
