@@ -3,310 +3,27 @@ import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 
 type Env = {
-  ZERODHA_API_KEY: string;
-  ZERODHA_API_SECRET: string;
-  ZERODHA_ACCESS_TOKEN?: string;
-  ZERODHA_TOKEN_STORE?: KVNamespace;
+  ZERODHA_API_KEY?: string;
+  ZERODHA_API_SECRET?: string;
+  ZERODHA_TOKEN_STORE: KVNamespace;
 };
 
-// ============================================================
-// ZERODHA ACCESS TOKEN
-// ============================================================
-
-async function getZerodhaAccessToken(
-  env: Env
-): Promise<string> {
-  if (env.ZERODHA_TOKEN_STORE) {
-    const stored =
-      await env.ZERODHA_TOKEN_STORE.get(
-        "access_token"
-      );
-
-    if (stored) {
-      return stored;
-    }
-  }
-
-  if (env.ZERODHA_ACCESS_TOKEN) {
-    return env.ZERODHA_ACCESS_TOKEN;
-  }
-
-  throw new Error(
-    "No Zerodha access token is available. Open /login to authenticate."
-  );
-}
-
-// ============================================================
-// GENERIC ZERODHA GET
-// ============================================================
-
-async function zerodhaGet(
-  path: string,
-  env: Env
-): Promise<unknown> {
-  if (!env.ZERODHA_API_KEY) {
-    throw new Error(
-      "ZERODHA_API_KEY secret is not configured"
-    );
-  }
-
-  const accessToken =
-    await getZerodhaAccessToken(env);
-
-  const response = await fetch(
-    "https://api.kite.trade" + path,
-    {
-      method: "GET",
-      headers: {
-        "X-Kite-Version": "3",
-        "Authorization":
-          "token " +
-          env.ZERODHA_API_KEY +
-          ":" +
-          accessToken,
-      },
-    }
-  );
-
-  const data =
-    await response.json();
-
-  if (!response.ok) {
-    throw new Error(
-      "Zerodha API error " +
-        response.status +
-        ": " +
-        JSON.stringify(data)
-    );
-  }
-
-  return data;
-}
-
-// ============================================================
-// ZERODHA LOGIN / CALLBACK
-// ============================================================
-
-async function handleZerodhaLogin(
-  request: Request,
-  env: Env
-): Promise<Response> {
-  if (!env.ZERODHA_API_KEY) {
-    return new Response(
-      "ZERODHA_API_KEY secret is not configured",
-      {
-        status: 500,
-      }
-    );
-  }
-
-  const url =
-    new URL(request.url);
-
-  // ----------------------------------------------------------
-  // LOGIN
-  // ----------------------------------------------------------
-
-  if (
-    url.pathname === "/login"
-  ) {
-    const loginUrl =
-      "https://kite.zerodha.com/connect/login?v=3&api_key=" +
-      encodeURIComponent(
-        env.ZERODHA_API_KEY
-      );
-
-    return Response.redirect(
-      loginUrl,
-      302
-    );
-  }
-
-  // ----------------------------------------------------------
-  // CALLBACK
-  // ----------------------------------------------------------
-
-  if (
-    url.pathname === "/callback"
-  ) {
-    if (!env.ZERODHA_API_SECRET) {
-      return new Response(
-        "ZERODHA_API_SECRET secret is not configured",
-        {
-          status: 500,
-        }
-      );
-    }
-
-    const requestToken =
-      url.searchParams.get(
-        "request_token"
-      );
-
-    const status =
-      url.searchParams.get(
-        "status"
-      );
-
-    if (
-      status !== "success" ||
-      !requestToken
-    ) {
-      return new Response(
-        "Zerodha login was not completed successfully. Please start again at /login.",
-        {
-          status: 400,
-        }
-      );
-    }
-
-    const checksumInput =
-      env.ZERODHA_API_KEY +
-      requestToken +
-      env.ZERODHA_API_SECRET;
-
-    const checksumBuffer =
-      await crypto.subtle.digest(
-        "SHA-256",
-        new TextEncoder().encode(
-          checksumInput
-        )
-      );
-
-    const checksum =
-      Array.from(
-        new Uint8Array(
-          checksumBuffer
-        )
-      )
-        .map((byte) =>
-          byte
-            .toString(16)
-            .padStart(2, "0")
-        )
-        .join("");
-
-    const tokenResponse =
-      await fetch(
-        "https://api.kite.trade/session/token",
-        {
-          method: "POST",
-          headers: {
-            "X-Kite-Version": "3",
-            "Content-Type":
-              "application/x-www-form-urlencoded",
-          },
-          body:
-            new URLSearchParams({
-              api_key:
-                env.ZERODHA_API_KEY,
-
-              request_token:
-                requestToken,
-
-              checksum,
-            }).toString(),
-        }
-      );
-
-    const tokenData =
-      await tokenResponse.json();
-
-    if (!tokenResponse.ok) {
-      return new Response(
-        "Zerodha authentication failed: " +
-          JSON.stringify(
-            tokenData
-          ),
-        {
-          status:
-            tokenResponse.status,
-        }
-      );
-    }
-
-    const accessToken =
-      tokenData?.data?.access_token;
-
-    if (!accessToken) {
-      return new Response(
-        "Zerodha authentication succeeded but no access token was returned.",
-        {
-          status: 502,
-        }
-      );
-    }
-
-    if (
-      env.ZERODHA_TOKEN_STORE
-    ) {
-      await env.ZERODHA_TOKEN_STORE.put(
-        "access_token",
-        accessToken
-      );
-
-      await env.ZERODHA_TOKEN_STORE.put(
-        "login_time",
-        tokenData?.data
-          ?.login_time ??
-          new Date().toISOString()
-      );
-    }
-
-    return new Response(
-      "Zerodha authentication successful. Your daily trading session is now connected. You can close this window.",
-      {
-        status: 200,
-        headers: {
-          "Content-Type":
-            "text/plain; charset=utf-8",
-        },
-      }
-    );
-  }
-
-  return new Response(
-    "Not found",
-    {
-      status: 404,
-    }
-  );
-}
-
-// ============================================================
-// CSV PARSER
-// ============================================================
-
-function parseCsvLine(
-  line: string
-): string[] {
+function parseCsvLine(line: string): string[] {
   const result: string[] = [];
-
   let current = "";
   let insideQuotes = false;
 
-  for (
-    let i = 0;
-    i < line.length;
-    i++
-  ) {
+  for (let i = 0; i < line.length; i++) {
     const char = line[i];
 
     if (char === '"') {
-      if (
-        insideQuotes &&
-        line[i + 1] === '"'
-      ) {
+      if (insideQuotes && line[i + 1] === '"') {
         current += '"';
         i++;
       } else {
-        insideQuotes =
-          !insideQuotes;
+        insideQuotes = !insideQuotes;
       }
-    } else if (
-      char === "," &&
-      !insideQuotes
-    ) {
+    } else if (char === "," && !insideQuotes) {
       result.push(current);
       current = "";
     } else {
@@ -315,49 +32,86 @@ function parseCsvLine(
   }
 
   result.push(current);
-
   return result;
 }
 
-// ============================================================
-// NFO INSTRUMENT MASTER
-// ============================================================
+async function getZerodhaAccessToken(env: Env): Promise<string> {
+  const accessToken = await env.ZERODHA_TOKEN_STORE.get("access_token");
 
-async function getNfoInstrumentMaster(
-  env: Env
-): Promise<
-  Record<string, string>[]
-> {
-  if (!env.ZERODHA_API_KEY) {
+  if (!accessToken) {
     throw new Error(
-      "ZERODHA_API_KEY secret is not configured"
+      "Zerodha is not authenticated. Open /login to authenticate."
     );
   }
 
-  const accessToken =
-    await getZerodhaAccessToken(
-      env
-    );
+  return accessToken;
+}
 
-  const response =
-    await fetch(
-      "https://api.kite.trade/instruments/NFO",
-      {
-        method: "GET",
-        headers: {
-          "X-Kite-Version": "3",
-          "Authorization":
-            "token " +
-            env.ZERODHA_API_KEY +
-            ":" +
-            accessToken,
-        },
-      }
-    );
+async function zerodhaGet(
+  env: Env,
+  endpoint: string,
+  params?: Record<string, string>
+): Promise<any> {
+  if (!env.ZERODHA_API_KEY) {
+    throw new Error("ZERODHA_API_KEY secret is not configured.");
+  }
+
+  const accessToken = await getZerodhaAccessToken(env);
+
+  const url = new URL(`https://api.kite.trade${endpoint}`);
+
+  if (params) {
+    Object.entries(params).forEach(([key, value]) => {
+      url.searchParams.set(key, value);
+    });
+  }
+
+  const response = await fetch(url.toString(), {
+    method: "GET",
+    headers: {
+      "X-Kite-Version": "3",
+      Authorization:
+        "token " + env.ZERODHA_API_KEY + ":" + accessToken,
+    },
+  });
+
+  const data = await response.json();
 
   if (!response.ok) {
-    const errorText =
-      await response.text();
+    throw new Error(
+      `Zerodha API error ${response.status}: ${JSON.stringify(data)}`
+    );
+  }
+
+  return data;
+}
+
+async function getNfoInstrumentMaster(
+  env: Env
+): Promise<Record<string, string>[]> {
+  if (!env.ZERODHA_API_KEY) {
+    throw new Error("ZERODHA_API_KEY secret is not configured.");
+  }
+
+  const accessToken = await getZerodhaAccessToken(env);
+
+  const response = await fetch(
+    "https://api.kite.trade/instruments/NFO",
+    {
+      method: "GET",
+      headers: {
+        "X-Kite-Version": "3",
+        Authorization:
+          "token " +
+          env.ZERODHA_API_KEY +
+          ":" +
+          accessToken,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
 
     throw new Error(
       "Zerodha instruments API error " +
@@ -367,54 +121,32 @@ async function getNfoInstrumentMaster(
     );
   }
 
-  const csv =
-    await response.text();
+  const csv = await response.text();
 
   const lines = csv
     .split(/\r?\n/)
-    .filter(
-      (line) =>
-        line.trim().length > 0
-    );
+    .filter((line) => line.trim().length > 0);
 
   if (lines.length < 2) {
-    throw new Error(
-      "Zerodha instrument master is empty."
-    );
+    throw new Error("Zerodha instrument master is empty.");
   }
 
-  const headers =
-    parseCsvLine(lines[0]);
+  const headers = parseCsvLine(lines[0]);
 
-  const instruments:
-    Record<string, string>[] =
-    [];
+  const instruments: Record<string, string>[] = [];
 
-  for (
-    let i = 1;
-    i < lines.length;
-    i++
-  ) {
-    const values =
-      parseCsvLine(lines[i]);
+  for (let i = 1; i < lines.length; i++) {
+    const values = parseCsvLine(lines[i]);
 
-    if (
-      values.length !==
-      headers.length
-    ) {
+    if (values.length !== headers.length) {
       continue;
     }
 
-    const row:
-      Record<string, string> =
-      {};
+    const row: Record<string, string> = {};
 
-    headers.forEach(
-      (header, index) => {
-        row[header] =
-          values[index];
-      }
-    );
+    headers.forEach((header, index) => {
+      row[header] = values[index];
+    });
 
     instruments.push(row);
   }
@@ -422,378 +154,758 @@ async function getNfoInstrumentMaster(
   return instruments;
 }
 
-// ============================================================
-// MCP SERVER
-// ============================================================
+function getSpotSymbol(underlying: "NIFTY" | "BANKNIFTY"): string {
+  return underlying === "NIFTY"
+    ? "NSE:NIFTY 50"
+    : "NSE:NIFTY BANK";
+}
 
-function createServer(
-  env: Env
+function getOptionMoneyness(
+  type: "CE" | "PE",
+  strike: number,
+  spot: number,
+  atm: number
+): string {
+  if (Math.abs(strike - atm) < 0.000001) {
+    return "ATM";
+  }
+
+  if (type === "CE") {
+    return strike < spot ? "ITM" : "OTM";
+  }
+
+  return strike > spot ? "ITM" : "OTM";
+}
+
+function getOptionIntrinsic(
+  type: "CE" | "PE",
+  strike: number,
+  spot: number
+): number {
+  if (type === "CE") {
+    return Math.max(0, spot - strike);
+  }
+
+  return Math.max(0, strike - spot);
+}
+
+function getDte(expiry: string): number {
+  const expiryDate = new Date(
+    expiry + "T15:30:00+05:30"
+  );
+
+  const now = new Date();
+
+  const millisecondsPerDay =
+    24 * 60 * 60 * 1000;
+
+  return Math.max(
+    0,
+    Math.ceil(
+      (expiryDate.getTime() - now.getTime()) /
+        millisecondsPerDay
+    )
+  );
+}
+
+function round2(value: number | null): number | null {
+  if (value === null || !Number.isFinite(value)) {
+    return null;
+  }
+
+  return Number(value.toFixed(2));
+}
+
+function round4(value: number | null): number | null {
+  if (value === null || !Number.isFinite(value)) {
+    return null;
+  }
+
+  return Number(value.toFixed(4));
+}
+
+function analyseOption(
+  quote: any,
+  contract: Record<string, string>,
+  spot: number,
+  atm: number
 ) {
-  const server =
-    new McpServer({
-      name: "Vikram Trading MCP",
-      version: "1.0.0",
-    });
+  const type = contract.instrument_type as "CE" | "PE";
+  const strike = Number(contract.strike);
 
-  // ==========================================================
-  // HELLO
-  // ==========================================================
+  const ltp =
+    typeof quote?.last_price === "number"
+      ? quote.last_price
+      : null;
 
-  server.registerTool(
-    "hello",
+  const bid =
+    typeof quote?.depth?.buy?.[0]?.price === "number"
+      ? quote.depth.buy[0].price
+      : null;
+
+  const bidQuantity =
+    typeof quote?.depth?.buy?.[0]?.quantity === "number"
+      ? quote.depth.buy[0].quantity
+      : null;
+
+  const ask =
+    typeof quote?.depth?.sell?.[0]?.price === "number"
+      ? quote.depth.sell[0].price
+      : null;
+
+  const askQuantity =
+    typeof quote?.depth?.sell?.[0]?.quantity === "number"
+      ? quote.depth.sell[0].quantity
+      : null;
+
+  const midPrice =
+    bid !== null &&
+    ask !== null &&
+    bid > 0 &&
+    ask > 0
+      ? (bid + ask) / 2
+      : null;
+
+  const spread =
+    bid !== null &&
+    ask !== null &&
+    bid > 0 &&
+    ask > 0
+      ? ask - bid
+      : null;
+
+  const spreadPct =
+    spread !== null &&
+    midPrice !== null &&
+    midPrice > 0
+      ? (spread / midPrice) * 100
+      : null;
+
+  const distanceFromSpot = strike - spot;
+
+  const distancePct =
+    (distanceFromSpot / spot) * 100;
+
+  const intrinsicValue =
+    getOptionIntrinsic(type, strike, spot);
+
+  const timeValue =
+    ltp !== null
+      ? Math.max(0, ltp - intrinsicValue)
+      : null;
+
+  const moneyness = getOptionMoneyness(
+    type,
+    strike,
+    spot,
+    atm
+  );
+
+  const otmPct =
+    type === "CE"
+      ? strike > spot
+        ? ((strike - spot) / spot) * 100
+        : 0
+      : strike < spot
+        ? ((spot - strike) / spot) * 100
+        : 0;
+
+  return {
+    symbol: contract.tradingsymbol,
+    instrument_token: Number(
+      contract.instrument_token
+    ),
+
+    strike,
+    option_type: type,
+
+    ltp: round2(ltp),
+
+    bid: round2(bid),
+    bid_quantity: bidQuantity,
+
+    ask: round2(ask),
+    ask_quantity: askQuantity,
+
+    mid_price: round2(midPrice),
+    spread: round2(spread),
+    spread_pct: round2(spreadPct),
+
+    moneyness,
+
+    distance_from_spot: round2(distanceFromSpot),
+    distance_pct: round2(distancePct),
+    otm_pct: round2(otmPct),
+
+    intrinsic_value: round2(intrinsicValue),
+    time_value: round2(timeValue),
+
+    oi:
+      typeof quote?.oi === "number"
+        ? quote.oi
+        : null,
+
+    volume:
+      typeof quote?.volume === "number"
+        ? quote.volume
+        : null,
+
+    oi_day_high:
+      typeof quote?.oi_day_high === "number"
+        ? quote.oi_day_high
+        : null,
+
+    oi_day_low:
+      typeof quote?.oi_day_low === "number"
+        ? quote.oi_day_low
+        : null,
+
+    net_change:
+      typeof quote?.net_change === "number"
+        ? quote.net_change
+        : null,
+  };
+}
+
+function selectExpiry(
+  contracts: Record<string, string>[],
+  requestedExpiry?: string
+): string {
+  const expiries = Array.from(
+    new Set(
+      contracts
+        .map((x) => x.expiry)
+        .filter(Boolean)
+    )
+  ).sort();
+
+  if (expiries.length === 0) {
+    throw new Error(
+      "No option expiries found for the requested underlying."
+    );
+  }
+
+  if (
+    requestedExpiry &&
+    requestedExpiry !== "nearest"
+  ) {
+    if (!expiries.includes(requestedExpiry)) {
+      throw new Error(
+        `Expiry ${requestedExpiry} was not found. Available expiries: ${expiries
+          .slice(0, 10)
+          .join(", ")}`
+      );
+    }
+
+    return requestedExpiry;
+  }
+
+  const today = new Date();
+
+  const futureExpiries = expiries.filter(
+    (expiry) =>
+      new Date(expiry + "T23:59:59+05:30") >=
+      today
+  );
+
+  if (futureExpiries.length === 0) {
+    throw new Error(
+      "No future option expiry found."
+    );
+  }
+
+  return futureExpiries[0];
+}
+
+async function handleZerodhaLogin(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  if (
+    request.method !== "GET"
+  ) {
+    return new Response(
+      "Method not allowed",
+      { status: 405 }
+    );
+  }
+
+  if (!env.ZERODHA_API_KEY) {
+    return new Response(
+      "ZERODHA_API_KEY secret is not configured.",
+      { status: 500 }
+    );
+  }
+
+  const loginUrl =
+    "https://kite.zerodha.com/connect/login?v=3&api_key=" +
+    encodeURIComponent(env.ZERODHA_API_KEY);
+
+  return Response.redirect(
+    loginUrl,
+    302
+  );
+}
+
+async function handleZerodhaCallback(
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const url = new URL(request.url);
+
+  const requestToken =
+    url.searchParams.get("request_token");
+
+  const status =
+    url.searchParams.get("status");
+
+  if (!requestToken) {
+    return new Response(
+      "Missing request_token.",
+      { status: 400 }
+    );
+  }
+
+  if (
+    !env.ZERODHA_API_KEY ||
+    !env.ZERODHA_API_SECRET
+  ) {
+    return new Response(
+      "Zerodha API credentials are not configured.",
+      { status: 500 }
+    );
+  }
+
+  const body =
+    "api_key=" +
+    encodeURIComponent(env.ZERODHA_API_KEY) +
+    "&request_token=" +
+    encodeURIComponent(requestToken) +
+    "&checksum=" +
+    encodeURIComponent(
+      await crypto.subtle
+        .digest(
+          "SHA-256",
+          new TextEncoder().encode(
+            env.ZERODHA_API_KEY +
+              requestToken +
+              env.ZERODHA_API_SECRET
+          )
+        )
+        .then((buffer) =>
+          Array.from(
+            new Uint8Array(buffer)
+          )
+            .map((b) =>
+              b.toString(16).padStart(2, "0")
+            )
+            .join("")
+        )
+    );
+
+  const response = await fetch(
+    "https://api.kite.trade/session/token",
     {
-      description:
-        "Basic MCP connectivity test",
-
-      inputSchema: {
-        name: z
-          .string()
-          .optional(),
+      method: "POST",
+      headers: {
+        "X-Kite-Version": "3",
+        "Content-Type":
+          "application/x-www-form-urlencoded",
       },
-    },
+      body,
+    }
+  );
 
-    async ({ name }) => ({
+  const data = await response.json();
+
+  if (!response.ok) {
+    return new Response(
+      "Zerodha authentication failed: " +
+        JSON.stringify(data),
+      { status: 500 }
+    );
+  }
+
+  const accessToken =
+    data?.data?.access_token;
+
+  if (!accessToken) {
+    return new Response(
+      "Zerodha authentication succeeded but no access token was returned.",
+      { status: 500 }
+    );
+  }
+
+  await env.ZERODHA_TOKEN_STORE.put(
+    "access_token",
+    accessToken
+  );
+
+  await env.ZERODHA_TOKEN_STORE.put(
+    "login_time",
+    new Date().toISOString()
+  );
+
+  return new Response(
+    `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Zerodha Authentication</title>
+<style>
+body {
+  font-family: Arial, sans-serif;
+  margin: 40px;
+  line-height: 1.5;
+}
+.success {
+  color: #137333;
+  font-size: 20px;
+  font-weight: bold;
+}
+</style>
+</head>
+<body>
+<div class="success">
+Zerodha authentication successful.
+</div>
+<p>
+Your daily trading session is now connected.
+You can close this window.
+</p>
+</body>
+</html>`,
+    {
+      headers: {
+        "Content-Type":
+          "text/html; charset=utf-8",
+      },
+    }
+  );
+}
+
+function createServer(env: Env) {
+  const server = new McpServer({
+    name: "Vikram Trading MCP",
+    version: "1.0.0",
+  });
+
+  // --------------------------------------------------
+  // 1. HELLO
+  // --------------------------------------------------
+
+  server.tool(
+    "hello",
+    "Simple MCP connectivity test.",
+    {},
+    async () => ({
       content: [
         {
-          text:
-            "Hello, " +
-            (name ?? "Vikram") +
-            "! MCP connection is working.",
           type: "text",
+          text: "Hello from Vikram Trading MCP.",
         },
       ],
     })
   );
 
-  // ==========================================================
-  // AUTH STATUS
-  // ==========================================================
+  // --------------------------------------------------
+  // 2. ZERODHA AUTH STATUS
+  // --------------------------------------------------
 
-  server.registerTool(
+  server.tool(
     "zerodha_auth_status",
-    {
-      description:
-        "Check whether a Zerodha access token is currently available. Read-only.",
-    },
-
+    "Check whether the Zerodha daily trading session is authenticated.",
+    {},
     async () => {
-      const token =
-        await getZerodhaAccessToken(
-          env
-        ).catch(
-          () => null
+      const accessToken =
+        await env.ZERODHA_TOKEN_STORE.get(
+          "access_token"
         );
 
       const loginTime =
-        env.ZERODHA_TOKEN_STORE
-          ? await env
-              .ZERODHA_TOKEN_STORE
-              .get(
-                "login_time"
-              )
-          : null;
+        await env.ZERODHA_TOKEN_STORE.get(
+          "login_time"
+        );
 
       return {
         content: [
           {
+            type: "text",
             text: JSON.stringify(
               {
                 authenticated:
-                  Boolean(
-                    token
-                  ),
-
+                  !!accessToken,
                 login_time:
-                  loginTime,
+                  loginTime || null,
               },
               null,
               2
             ),
-
-            type: "text",
           },
         ],
       };
     }
   );
 
-  // ==========================================================
-  // PROFILE
-  // ==========================================================
+  // --------------------------------------------------
+  // 3. ZERODHA PROFILE
+  // --------------------------------------------------
 
-  server.registerTool(
+  server.tool(
     "zerodha_profile",
-    {
-      description:
-        "Read the authenticated Zerodha account profile. Read-only.",
-    },
+    "Read the authenticated Zerodha user profile.",
+    {},
+    async () => {
+      const data = await zerodhaGet(
+        env,
+        "/user/profile"
+      );
 
-    async () => ({
-      content: [
-        {
-          text: JSON.stringify(
-            await zerodhaGet(
-              "/user/profile",
-              env
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              data,
+              null,
+              2
             ),
-            null,
-            2
-          ),
-
-          type: "text",
-        },
-      ],
-    })
+          },
+        ],
+      };
+    }
   );
 
-  // ==========================================================
-  // MARGINS
-  // ==========================================================
+  // --------------------------------------------------
+  // 4. ZERODHA MARGINS
+  // --------------------------------------------------
 
-  server.registerTool(
+  server.tool(
     "zerodha_margins",
-    {
-      description:
-        "Read current Zerodha funds and margin information. Read-only.",
-    },
+    "Read Zerodha equity and commodity margins.",
+    {},
+    async () => {
+      const data = await zerodhaGet(
+        env,
+        "/user/margins"
+      );
 
-    async () => ({
-      content: [
-        {
-          text: JSON.stringify(
-            await zerodhaGet(
-              "/user/margins",
-              env
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              data,
+              null,
+              2
             ),
-            null,
-            2
-          ),
-
-          type: "text",
-        },
-      ],
-    })
+          },
+        ],
+      };
+    }
   );
 
-  // ==========================================================
-  // QUOTE
-  // ==========================================================
+  // --------------------------------------------------
+  // 5. ZERODHA QUOTE
+  // --------------------------------------------------
 
-  server.registerTool(
+  server.tool(
     "zerodha_quote",
+    "Get full Zerodha market quotes for one or more comma-separated symbols. Example: NSE:NIFTY 50,NSE:INDIA VIX.",
     {
-      description:
-        "Read live Zerodha market quotes for one or more exchange-qualified trading symbols. Enter symbols separated by commas. Read-only.",
-
-      inputSchema: {
-        symbols:
-          z.string().min(1),
-      },
+      symbols: z
+        .string()
+        .min(1),
     },
+    async ({ symbols }) => {
+      const symbolList = symbols
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean);
 
-    async ({
-      symbols,
-    }) => {
-      const symbolList =
-        symbols
-          .split(",")
-          .map(
-            (symbol) =>
-              symbol.trim()
-          )
-          .filter(Boolean)
-          .slice(0, 50);
-
-      if (
-        symbolList.length === 0
-      ) {
+      if (symbolList.length === 0) {
         throw new Error(
-          "At least one trading symbol is required."
+          "At least one symbol is required."
         );
       }
 
-      const params =
+      if (symbolList.length > 50) {
+        throw new Error(
+          "Maximum 50 symbols allowed per quote request."
+        );
+      }
+
+      const params: Record<
+        string,
+        string
+      > = {};
+
+      symbolList.forEach(
+        (symbol, index) => {
+          params[`i`] =
+            index === 0
+              ? symbol
+              : params[`i`]
+                ? params[`i`] + "," + symbol
+                : symbol;
+        }
+      );
+
+      const query =
         new URLSearchParams();
 
-      for (
-        const symbol of
-          symbolList
-      ) {
-        params.append(
-          "i",
-          symbol
+      symbolList.forEach((symbol) =>
+        query.append("i", symbol)
+      );
+
+      if (!env.ZERODHA_API_KEY) {
+        throw new Error(
+          "ZERODHA_API_KEY secret is not configured."
+        );
+      }
+
+      const accessToken =
+        await getZerodhaAccessToken(
+          env
+        );
+
+      const response = await fetch(
+        "https://api.kite.trade/quote?" +
+          query.toString(),
+        {
+          method: "GET",
+          headers: {
+            "X-Kite-Version": "3",
+            Authorization:
+              "token " +
+              env.ZERODHA_API_KEY +
+              ":" +
+              accessToken,
+          },
+        }
+      );
+
+      const data =
+        await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          "Zerodha quote API error " +
+            response.status +
+            ": " +
+            JSON.stringify(data)
         );
       }
 
       return {
         content: [
           {
+            type: "text",
             text: JSON.stringify(
-              await zerodhaGet(
-                "/quote?" +
-                  params.toString(),
-                env
-              ),
+              data,
               null,
               2
             ),
-
-            type: "text",
           },
         ],
       };
     }
   );
 
-  // ==========================================================
-  // INSTRUMENTS
-  // ==========================================================
+  // --------------------------------------------------
+  // 6. ZERODHA INSTRUMENTS
+  // --------------------------------------------------
 
-  server.registerTool(
+  server.tool(
     "zerodha_instruments",
-    {
-      description:
-        "Read the current Zerodha NFO instrument master. Returns option and futures contract metadata including trading symbol, expiry, strike, instrument token and lot size. Read-only.",
-    },
-
+    "Download and parse the Zerodha NFO instrument master.",
+    {},
     async () => {
       const instruments =
         await getNfoInstrumentMaster(
           env
         );
 
-      const headers = [
-        "instrument_token",
-        "exchange_token",
-        "tradingsymbol",
-        "name",
-        "last_price",
-        "expiry",
-        "strike",
-        "tick_size",
-        "lot_size",
-        "instrument_type",
-        "segment",
-        "exchange",
-      ];
-
-      const rows =
-        instruments.map(
-          (instrument) =>
-            headers
-              .map(
-                (header) =>
-                  instrument[
-                    header
-                  ] ?? ""
-              )
-              .join(",")
-        );
-
       return {
         content: [
           {
-            text:
-              headers.join(",") +
-              "\n" +
-              rows.join("\n"),
-
             type: "text",
+            text: JSON.stringify(
+              {
+                status: "success",
+                count:
+                  instruments.length,
+                data: instruments,
+              },
+              null,
+              2
+            ),
           },
         ],
       };
     }
   );
 
-  // ==========================================================
-  // OPTION CHAIN
-  // ==========================================================
+  // --------------------------------------------------
+  // 7. ZERODHA OPTION CHAIN
+  // --------------------------------------------------
 
-  server.registerTool(
+  server.tool(
     "zerodha_option_chain",
+    "Build a Zerodha NIFTY or BANKNIFTY option chain around ATM for a selected expiry.",
     {
-      description:
-        "Build a live NIFTY or BANKNIFTY option chain from Zerodha instrument metadata and live quotes. Returns expiry, spot, ATM, strikes, CE/PE symbols, LTP, bid, ask, bid/ask quantities, bid-ask spread, OI, volume and OI day high/low. Read-only.",
+      underlying: z.enum([
+        "NIFTY",
+        "BANKNIFTY",
+      ]),
 
-      inputSchema: {
-        underlying:
-          z.enum([
-            "NIFTY",
-            "BANKNIFTY",
-          ]),
+      expiry: z
+        .string()
+        .optional(),
 
-        expiry:
-          z.string().optional(),
-
-        strikes_each_side:
-          z
-            .number()
-            .int()
-            .min(5)
-            .max(50)
-            .optional(),
-      },
+      strikes_each_side: z
+        .number()
+        .int()
+        .min(5)
+        .max(50)
+        .optional(),
     },
-
     async ({
       underlying,
       expiry,
-      strikes_each_side,
+      strikes_each_side = 10,
     }) => {
-      const strikeCount =
-        strikes_each_side ??
-        20;
-
-      // ------------------------------------------------------
-      // Get instrument master
-      // ------------------------------------------------------
-
       const instruments =
         await getNfoInstrumentMaster(
           env
         );
 
-      // ------------------------------------------------------
-      // Get spot
-      // ------------------------------------------------------
-
       const spotSymbol =
-        underlying ===
-        "NIFTY"
-          ? "NSE:NIFTY 50"
-          : "NSE:NIFTY BANK";
+        getSpotSymbol(underlying);
 
-      const spotData =
-        (await zerodhaGet(
-          "/quote?" +
-            new URLSearchParams({
-              i: spotSymbol,
-            }).toString(),
-          env
-        )) as any;
+      const spotResponse =
+        await zerodhaGet(
+          env,
+          "/quote",
+          {
+            i: spotSymbol,
+          }
+        );
 
       const spot =
-        spotData?.data?.[
+        spotResponse?.data?.[
           spotSymbol
         ]?.last_price;
 
       if (
-        typeof spot !==
-          "number" ||
-        spot <= 0
+        typeof spot !== "number"
       ) {
         throw new Error(
-          "Unable to obtain live " +
-            underlying +
-            " spot price."
+          `Unable to obtain spot price for ${underlying}.`
         );
       }
 
-      // ------------------------------------------------------
-      // Filter options
-      // ------------------------------------------------------
-
-      const optionContracts =
+      const contracts =
         instruments.filter(
           (instrument) =>
             instrument.name ===
@@ -808,526 +920,282 @@ function createServer(
             )
         );
 
-      if (
-        optionContracts.length ===
-        0
-      ) {
-        throw new Error(
-          "No option contracts found for " +
-            underlying +
-            "."
-        );
-      }
-
-      // ------------------------------------------------------
-      // Expiry
-      // ------------------------------------------------------
-
-      const today =
-        new Date()
-          .toISOString()
-          .slice(0, 10);
-
-      const expiryList = [
-        ...new Set(
-          optionContracts.map(
-            (instrument) =>
-              instrument.expiry
-          )
-        ),
-      ]
-        .filter(
-          (date) =>
-            date >= today
-        )
-        .sort();
-
-      if (
-        expiryList.length === 0
-      ) {
-        throw new Error(
-          "No current or future expiry found for " +
-            underlying +
-            "."
-        );
-      }
-
       const selectedExpiry =
-        !expiry ||
-        expiry === "nearest"
-          ? expiryList[0]
-          : expiry;
-
-      if (
-        !expiryList.includes(
-          selectedExpiry
-        )
-      ) {
-        throw new Error(
-          "Invalid expiry " +
-            selectedExpiry +
-            ". Available expiries: " +
-            expiryList
-              .slice(0, 10)
-              .join(", ")
+        selectExpiry(
+          contracts,
+          expiry
         );
-      }
 
       const expiryContracts =
-        optionContracts.filter(
-          (instrument) =>
-            instrument.expiry ===
+        contracts.filter(
+          (x) =>
+            x.expiry ===
             selectedExpiry
         );
 
-      // ------------------------------------------------------
-      // Strikes
-      // ------------------------------------------------------
-
-      const strikes = [
-        ...new Set(
+      const strikes = Array.from(
+        new Set(
           expiryContracts
-            .map(
-              (instrument) =>
-                Number(
-                  instrument.strike
-                )
+            .map((x) =>
+              Number(x.strike)
             )
-            .filter(
-              (strike) =>
-                Number.isFinite(
-                  strike
-                ) &&
-                strike > 0
-            )
-        ),
-      ].sort(
-        (a, b) =>
-          a - b
+            .filter(Number.isFinite)
+        )
+      ).sort(
+        (a, b) => a - b
       );
 
-      if (
-        strikes.length === 0
-      ) {
+      if (strikes.length === 0) {
         throw new Error(
-          "No strikes found for expiry " +
-            selectedExpiry +
-            "."
+          "No strikes found for selected expiry."
         );
       }
 
-      // ------------------------------------------------------
-      // ATM
-      // ------------------------------------------------------
-
-      let nearestIndex = 0;
-
-      let nearestDistance =
-        Infinity;
-
-      for (
-        let i = 0;
-        i < strikes.length;
-        i++
-      ) {
-        const distance =
-          Math.abs(
-            strikes[i] -
-              spot
-          );
-
-        if (
-          distance <
-          nearestDistance
-        ) {
-          nearestDistance =
-            distance;
-
-          nearestIndex =
-            i;
-        }
-      }
-
-      // ------------------------------------------------------
-      // Select strikes
-      // ------------------------------------------------------
-
-      const startIndex =
-        Math.max(
-          0,
-          nearestIndex -
-            strikeCount
+      let atm =
+        strikes.reduce(
+          (
+            closest,
+            strike
+          ) =>
+            Math.abs(
+              strike - spot
+            ) <
+            Math.abs(
+              closest - spot
+            )
+              ? strike
+              : closest,
+          strikes[0]
         );
 
-      const endIndex =
-        Math.min(
-          strikes.length,
-          nearestIndex +
-            strikeCount +
-            1
-        );
+      const atmIndex =
+        strikes.indexOf(atm);
 
       const selectedStrikes =
         strikes.slice(
-          startIndex,
-          endIndex
+          Math.max(
+            0,
+            atmIndex -
+              strikes_each_side
+          ),
+          Math.min(
+            strikes.length,
+            atmIndex +
+              strikes_each_side +
+              1
+          )
         );
 
-      // ------------------------------------------------------
-      // Map contracts
-      // ------------------------------------------------------
-
-      const contractsByStrike =
-        new Map<
-          number,
-          {
-            CE?: Record<
-              string,
-              string
-            >;
-
-            PE?: Record<
-              string,
-              string
-            >;
-          }
-        >();
-
-      for (
-        const instrument of
-          expiryContracts
-      ) {
-        const strike =
-          Number(
-            instrument.strike
-          );
-
-        if (
-          !selectedStrikes.includes(
-            strike
-          )
-        ) {
-          continue;
-        }
-
-        if (
-          !contractsByStrike.has(
-            strike
-          )
-        ) {
-          contractsByStrike.set(
-            strike,
-            {}
-          );
-        }
-
-        const entry =
-          contractsByStrike.get(
-            strike
-          )!;
-
-        if (
-          instrument.instrument_type ===
-          "CE"
-        ) {
-          entry.CE =
-            instrument;
-        }
-
-        if (
-          instrument.instrument_type ===
-          "PE"
-        ) {
-          entry.PE =
-            instrument;
-        }
-      }
-
-      // ------------------------------------------------------
-      // Quote symbols
-      // ------------------------------------------------------
-
-      const quoteSymbols:
-        string[] = [];
-
-      for (
-        const strike of
-          selectedStrikes
-      ) {
-        const entry =
-          contractsByStrike.get(
-            strike
-          );
-
-        if (entry?.CE) {
-          quoteSymbols.push(
-            "NFO:" +
-              entry.CE
-                .tradingsymbol
-          );
-        }
-
-        if (entry?.PE) {
-          quoteSymbols.push(
-            "NFO:" +
-              entry.PE
-                .tradingsymbol
-          );
-        }
-      }
-
-      if (
-        quoteSymbols.length >
-        450
-      ) {
-        throw new Error(
-          "Too many option contracts selected. Reduce strikes_each_side."
+      const selectedContracts =
+        expiryContracts.filter(
+          (x) =>
+            selectedStrikes.includes(
+              Number(x.strike)
+            )
         );
-      }
 
-      // ------------------------------------------------------
-      // Get quotes
-      // ------------------------------------------------------
-
-      const quoteParams =
+      const query =
         new URLSearchParams();
 
-      for (
-        const symbol of
-          quoteSymbols
-      ) {
-        quoteParams.append(
-          "i",
-          symbol
+      selectedContracts.forEach(
+        (contract) => {
+          query.append(
+            "i",
+            `NFO:${contract.tradingsymbol}`
+          );
+        }
+      );
+
+      const accessToken =
+        await getZerodhaAccessToken(
+          env
         );
-      }
+
+      const quoteResponse =
+        await fetch(
+          "https://api.kite.trade/quote?" +
+            query.toString(),
+          {
+            method: "GET",
+            headers: {
+              "X-Kite-Version": "3",
+              Authorization:
+                "token " +
+                env.ZERODHA_API_KEY +
+                ":" +
+                accessToken,
+            },
+          }
+        );
 
       const quoteData =
-        (await zerodhaGet(
-          "/quote?" +
-            quoteParams.toString(),
-          env
-        )) as any;
+        await quoteResponse.json();
 
-      // ------------------------------------------------------
-      // Build chain
-      // ------------------------------------------------------
+      if (!quoteResponse.ok) {
+        throw new Error(
+          "Zerodha option quote API error " +
+            quoteResponse.status +
+            ": " +
+            JSON.stringify(
+              quoteData
+            )
+        );
+      }
 
       const chain =
         selectedStrikes.map(
           (strike) => {
-            const entry =
-              contractsByStrike.get(
-                strike
+            const ce =
+              selectedContracts.find(
+                (x) =>
+                  Number(
+                    x.strike
+                  ) === strike &&
+                  x.instrument_type ===
+                    "CE"
               );
 
-            const ceSymbol =
-              entry?.CE
-                ? "NFO:" +
-                  entry.CE
-                    .tradingsymbol
-                : null;
-
-            const peSymbol =
-              entry?.PE
-                ? "NFO:" +
-                  entry.PE
-                    .tradingsymbol
-                : null;
+            const pe =
+              selectedContracts.find(
+                (x) =>
+                  Number(
+                    x.strike
+                  ) === strike &&
+                  x.instrument_type ===
+                    "PE"
+              );
 
             const ceQuote =
-              ceSymbol
-                ? quoteData
-                    ?.data?.[
-                      ceSymbol
-                    ]
+              ce
+                ? quoteData?.data?.[
+                    `NFO:${ce.tradingsymbol}`
+                  ]
                 : null;
 
             const peQuote =
-              peSymbol
-                ? quoteData
-                    ?.data?.[
-                      peSymbol
-                    ]
+              pe
+                ? quoteData?.data?.[
+                    `NFO:${pe.tradingsymbol}`
+                  ]
                 : null;
 
             const ceBid =
-              ceQuote
-                ?.depth?.buy?.[0]
-                ?.price ?? null;
-
-            const ceBidQuantity =
-              ceQuote
-                ?.depth?.buy?.[0]
-                ?.quantity ?? null;
+              ceQuote?.depth?.buy?.[0]
+                ?.price ??
+              null;
 
             const ceAsk =
-              ceQuote
-                ?.depth?.sell?.[0]
-                ?.price ?? null;
-
-            const ceAskQuantity =
-              ceQuote
-                ?.depth?.sell?.[0]
-                ?.quantity ?? null;
-
-            const ceBidAskSpread =
-              ceBid !== null &&
-              ceAsk !== null
-                ? Number(
-                    (
-                      ceAsk -
-                      ceBid
-                    ).toFixed(2)
-                  )
-                : null;
+              ceQuote?.depth?.sell?.[0]
+                ?.price ??
+              null;
 
             const peBid =
-              peQuote
-                ?.depth?.buy?.[0]
-                ?.price ?? null;
-
-            const peBidQuantity =
-              peQuote
-                ?.depth?.buy?.[0]
-                ?.quantity ?? null;
+              peQuote?.depth?.buy?.[0]
+                ?.price ??
+              null;
 
             const peAsk =
-              peQuote
-                ?.depth?.sell?.[0]
-                ?.price ?? null;
-
-            const peAskQuantity =
-              peQuote
-                ?.depth?.sell?.[0]
-                ?.quantity ?? null;
-
-            const peBidAskSpread =
-              peBid !== null &&
-              peAsk !== null
-                ? Number(
-                    (
-                      peAsk -
-                      peBid
-                    ).toFixed(2)
-                  )
-                : null;
+              peQuote?.depth?.sell?.[0]
+                ?.price ??
+              null;
 
             return {
               strike,
 
-              CE: entry?.CE
+              ce: ce
                 ? {
                     symbol:
-                      entry.CE
-                        .tradingsymbol,
-
+                      ce.tradingsymbol,
                     instrument_token:
                       Number(
-                        entry.CE
-                          .instrument_token
+                        ce.instrument_token
                       ),
-
                     ltp:
-                      ceQuote
-                        ?.last_price ??
+                      ceQuote?.last_price ??
                       null,
-
-                    bid:
-                      ceBid,
-
+                    bid: ceBid,
                     bid_quantity:
-                      ceBidQuantity,
-
-                    ask:
-                      ceAsk,
-
+                      ceQuote?.depth?.buy?.[0]
+                        ?.quantity ??
+                      null,
+                    ask: ceAsk,
                     ask_quantity:
-                      ceAskQuantity,
-
+                      ceQuote?.depth?.sell?.[0]
+                        ?.quantity ??
+                      null,
                     bid_ask_spread:
-                      ceBidAskSpread,
-
+                      ceBid !== null &&
+                      ceAsk !== null
+                        ? Number(
+                            (
+                              ceAsk -
+                              ceBid
+                            ).toFixed(2)
+                          )
+                        : null,
                     oi:
                       ceQuote?.oi ??
                       null,
-
                     volume:
-                      ceQuote
-                        ?.volume ??
+                      ceQuote?.volume ??
                       null,
-
                     oi_day_high:
-                      ceQuote
-                        ?.oi_day_high ??
+                      ceQuote?.oi_day_high ??
                       null,
-
                     oi_day_low:
-                      ceQuote
-                        ?.oi_day_low ??
+                      ceQuote?.oi_day_low ??
                       null,
-
                     net_change:
-                      ceQuote
-                        ?.net_change ??
+                      ceQuote?.net_change ??
                       null,
                   }
                 : null,
 
-              PE: entry?.PE
+              pe: pe
                 ? {
                     symbol:
-                      entry.PE
-                        .tradingsymbol,
-
+                      pe.tradingsymbol,
                     instrument_token:
                       Number(
-                        entry.PE
-                          .instrument_token
+                        pe.instrument_token
                       ),
-
                     ltp:
-                      peQuote
-                        ?.last_price ??
+                      peQuote?.last_price ??
                       null,
-
-                    bid:
-                      peBid,
-
+                    bid: peBid,
                     bid_quantity:
-                      peBidQuantity,
-
-                    ask:
-                      peAsk,
-
+                      peQuote?.depth?.buy?.[0]
+                        ?.quantity ??
+                      null,
+                    ask: peAsk,
                     ask_quantity:
-                      peAskQuantity,
-
+                      peQuote?.depth?.sell?.[0]
+                        ?.quantity ??
+                      null,
                     bid_ask_spread:
-                      peBidAskSpread,
-
+                      peBid !== null &&
+                      peAsk !== null
+                        ? Number(
+                            (
+                              peAsk -
+                              peBid
+                            ).toFixed(2)
+                          )
+                        : null,
                     oi:
                       peQuote?.oi ??
                       null,
-
                     volume:
-                      peQuote
-                        ?.volume ??
+                      peQuote?.volume ??
                       null,
-
                     oi_day_high:
-                      peQuote
-                        ?.oi_day_high ??
+                      peQuote?.oi_day_high ??
                       null,
-
                     oi_day_low:
-                      peQuote
-                        ?.oi_day_low ??
+                      peQuote?.oi_day_low ??
                       null,
-
                     net_change:
-                      peQuote
-                        ?.net_change ??
+                      peQuote?.net_change ??
                       null,
                   }
                 : null,
@@ -1338,124 +1206,89 @@ function createServer(
       return {
         content: [
           {
+            type: "text",
             text: JSON.stringify(
               {
+                status: "success",
                 underlying,
-
                 spot,
-
                 expiry:
                   selectedExpiry,
-
-                atm:
-                  strikes[
-                    nearestIndex
-                  ],
-
-                strikes_each_side:
-                  strikeCount,
-
+                atm,
+                strikes_each_side,
                 contracts:
-                  chain.length,
-
+                  selectedContracts.length,
                 chain,
               },
               null,
               2
             ),
-
-            type: "text",
           },
         ],
       };
     }
   );
 
-  // ==========================================================
-  // OPTION ANALYSIS
-  // ==========================================================
+  // --------------------------------------------------
+  // 8. ZERODHA OPTION ANALYSIS
+  // --------------------------------------------------
 
-  server.registerTool(
+  server.tool(
     "zerodha_option_analysis",
+    "Analyse NIFTY or BANKNIFTY option contracts around ATM, including moneyness, OTM percentage, distance from spot, intrinsic value, time value, OI and bid/ask.",
     {
-      description:
-        "Analyse the live NIFTY or BANKNIFTY option chain. Returns spot, expiry, DTE, ATM and derived CE/PE metrics including moneyness, distance from spot, OTM percentage, mid price, bid-ask spread, spread percentage, intrinsic value and time value. Read-only.",
+      underlying: z.enum([
+        "NIFTY",
+        "BANKNIFTY",
+      ]),
 
-      inputSchema: {
-        underlying:
-          z.enum([
-            "NIFTY",
-            "BANKNIFTY",
-          ]),
+      expiry: z
+        .string()
+        .optional(),
 
-        expiry:
-          z.string().optional(),
-
-        strikes_each_side:
-          z
-            .number()
-            .int()
-            .min(5)
-            .max(50)
-            .optional(),
-      },
+      strikes_each_side: z
+        .number()
+        .int()
+        .min(5)
+        .max(50)
+        .optional(),
     },
-
     async ({
       underlying,
       expiry,
-      strikes_each_side,
+      strikes_each_side = 10,
     }) => {
-      // ------------------------------------------------------
-      // 1. Instrument master
-      // ------------------------------------------------------
-
       const instruments =
         await getNfoInstrumentMaster(
           env
         );
 
-      // ------------------------------------------------------
-      // 2. Spot
-      // ------------------------------------------------------
-
       const spotSymbol =
-        underlying ===
-        "NIFTY"
-          ? "NSE:NIFTY 50"
-          : "NSE:NIFTY BANK";
+        getSpotSymbol(underlying);
 
-      const spotData =
-        (await zerodhaGet(
-          "/quote?" +
-            new URLSearchParams({
-              i: spotSymbol,
-            }).toString(),
-          env
-        )) as any;
+      const spotResponse =
+        await zerodhaGet(
+          env,
+          "/quote",
+          {
+            i: spotSymbol,
+          }
+        );
 
       const spot =
-        spotData?.data?.[
+        spotResponse?.data?.[
           spotSymbol
         ]?.last_price;
 
       if (
-        typeof spot !==
-          "number" ||
-        spot <= 0
+        typeof spot !== "number"
       ) {
         throw new Error(
-          "Unable to obtain live " +
-            underlying +
-            " spot price."
+          `Unable to obtain spot price for ${underlying}.`
         );
       }
 
-      // ------------------------------------------------------
-      // 3. Filter options
-      // ------------------------------------------------------
-
-      const optionContracts =
+      const contracts =
         instruments.filter(
           (instrument) =>
             instrument.name ===
@@ -1470,916 +1303,1014 @@ function createServer(
             )
         );
 
-      if (
-        optionContracts.length ===
-        0
-      ) {
-        throw new Error(
-          "No option contracts found for " +
-            underlying +
-            "."
-        );
-      }
-
-      // ------------------------------------------------------
-      // 4. Expiry
-      // ------------------------------------------------------
-
-      const today =
-        new Date()
-          .toISOString()
-          .slice(0, 10);
-
-      const expiryList = [
-        ...new Set(
-          optionContracts.map(
-            (instrument) =>
-              instrument.expiry
-          )
-        ),
-      ]
-        .filter(
-          (date) =>
-            date >= today
-        )
-        .sort();
-
-      if (
-        expiryList.length === 0
-      ) {
-        throw new Error(
-          "No current or future expiry found for " +
-            underlying +
-            "."
-        );
-      }
-
       const selectedExpiry =
-        !expiry ||
-        expiry === "nearest"
-          ? expiryList[0]
-          : expiry;
+        selectExpiry(
+          contracts,
+          expiry
+        );
 
-      if (
-        !expiryList.includes(
+      const dte =
+        getDte(
           selectedExpiry
-        )
-      ) {
-        throw new Error(
-          "Invalid expiry " +
-            selectedExpiry +
-            ". Available expiries: " +
-            expiryList
-              .slice(0, 10)
-              .join(", ")
         );
-      }
-
-      // ------------------------------------------------------
-      // 5. DTE
-      // ------------------------------------------------------
-
-      const expiryDate =
-        new Date(
-          selectedExpiry +
-            "T15:30:00+05:30"
-        );
-
-      const now =
-        new Date();
-
-      const millisecondsPerDay =
-        24 *
-        60 *
-        60 *
-        1000;
-
-      const dte = Math.max(
-        0,
-        Math.ceil(
-          (
-            expiryDate.getTime() -
-            now.getTime()
-          ) /
-            millisecondsPerDay
-        )
-      );
-
-      // ------------------------------------------------------
-      // 6. Strikes
-      // ------------------------------------------------------
 
       const expiryContracts =
-        optionContracts.filter(
-          (instrument) =>
-            instrument.expiry ===
+        contracts.filter(
+          (x) =>
+            x.expiry ===
             selectedExpiry
         );
 
-      const strikes = [
-        ...new Set(
+      const strikes = Array.from(
+        new Set(
           expiryContracts
-            .map(
-              (instrument) =>
-                Number(
-                  instrument.strike
-                )
+            .map((x) =>
+              Number(x.strike)
             )
-            .filter(
-              (strike) =>
-                Number.isFinite(
-                  strike
-                ) &&
-                strike > 0
-            )
-        ),
-      ].sort(
-        (a, b) =>
-          a - b
+            .filter(Number.isFinite)
+        )
+      ).sort(
+        (a, b) => a - b
       );
 
-      if (
-        strikes.length === 0
-      ) {
-        throw new Error(
-          "No strikes found for expiry " +
-            selectedExpiry +
-            "."
+      const atm =
+        strikes.reduce(
+          (
+            closest,
+            strike
+          ) =>
+            Math.abs(
+              strike - spot
+            ) <
+            Math.abs(
+              closest - spot
+            )
+              ? strike
+              : closest,
+          strikes[0]
         );
-      }
-
-      // ------------------------------------------------------
-      // 7. ATM
-      // ------------------------------------------------------
-
-      let atm =
-        strikes[0];
-
-      let nearestDistance =
-        Math.abs(
-          atm - spot
-        );
-
-      for (
-        const strike of
-          strikes
-      ) {
-        const distance =
-          Math.abs(
-            strike - spot
-          );
-
-        if (
-          distance <
-          nearestDistance
-        ) {
-          nearestDistance =
-            distance;
-
-          atm =
-            strike;
-        }
-      }
-
-      // ------------------------------------------------------
-      // 8. Select strikes
-      // ------------------------------------------------------
-
-      const strikeCount =
-        strikes_each_side ??
-        20;
 
       const atmIndex =
-        strikes.indexOf(
-          atm
-        );
-
-      const startIndex =
-        Math.max(
-          0,
-          atmIndex -
-            strikeCount
-        );
-
-      const endIndex =
-        Math.min(
-          strikes.length,
-          atmIndex +
-            strikeCount +
-            1
-        );
+        strikes.indexOf(atm);
 
       const selectedStrikes =
         strikes.slice(
-          startIndex,
-          endIndex
+          Math.max(
+            0,
+            atmIndex -
+              strikes_each_side
+          ),
+          Math.min(
+            strikes.length,
+            atmIndex +
+              strikes_each_side +
+              1
+          )
         );
 
-      // ------------------------------------------------------
-      // 9. Map contracts
-      // ------------------------------------------------------
+      const selectedContracts =
+        expiryContracts.filter(
+          (x) =>
+            selectedStrikes.includes(
+              Number(x.strike)
+            )
+        );
 
-      const contractsByStrike =
-        new Map<
-          number,
-          {
-            CE?: Record<
-              string,
-              string
-            >;
-
-            PE?: Record<
-              string,
-              string
-            >;
-          }
-        >();
-
-      for (
-        const instrument of
-          expiryContracts
-      ) {
-        const strike =
-          Number(
-            instrument.strike
-          );
-
-        if (
-          !selectedStrikes.includes(
-            strike
-          )
-        ) {
-          continue;
-        }
-
-        if (
-          !contractsByStrike.has(
-            strike
-          )
-        ) {
-          contractsByStrike.set(
-            strike,
-            {}
-          );
-        }
-
-        const entry =
-          contractsByStrike.get(
-            strike
-          )!;
-
-        if (
-          instrument.instrument_type ===
-          "CE"
-        ) {
-          entry.CE =
-            instrument;
-        }
-
-        if (
-          instrument.instrument_type ===
-          "PE"
-        ) {
-          entry.PE =
-            instrument;
-        }
-      }
-
-      // ------------------------------------------------------
-      // 10. Quote symbols
-      // ------------------------------------------------------
-
-      const quoteSymbols:
-        string[] = [];
-
-      for (
-        const strike of
-          selectedStrikes
-      ) {
-        const entry =
-          contractsByStrike.get(
-            strike
-          );
-
-        if (entry?.CE) {
-          quoteSymbols.push(
-            "NFO:" +
-              entry.CE
-                .tradingsymbol
-          );
-        }
-
-        if (entry?.PE) {
-          quoteSymbols.push(
-            "NFO:" +
-              entry.PE
-                .tradingsymbol
-          );
-        }
-      }
-
-      // ------------------------------------------------------
-      // 11. Live quotes
-      // ------------------------------------------------------
-
-      const quoteParams =
+      const query =
         new URLSearchParams();
 
-      for (
-        const symbol of
-          quoteSymbols
-      ) {
-        quoteParams.append(
-          "i",
-          symbol
-        );
-      }
+      selectedContracts.forEach(
+        (contract) => {
+          query.append(
+            "i",
+            `NFO:${contract.tradingsymbol}`
+          );
+        }
+      );
 
-      const quoteData =
-        (await zerodhaGet(
-          "/quote?" +
-            quoteParams.toString(),
+      const accessToken =
+        await getZerodhaAccessToken(
           env
-        )) as any;
+        );
 
-      // ------------------------------------------------------
-      // 12. Option analytics helper
-      // ------------------------------------------------------
-
-      function analyseOption(
-        quote: any,
-        strike: number,
-        type: "CE" | "PE"
-      ) {
-        const ltp =
-          quote?.last_price ??
-          null;
-
-        const bid =
-          quote
-            ?.depth?.buy?.[0]
-            ?.price ?? null;
-
-        const ask =
-          quote
-            ?.depth?.sell?.[0]
-            ?.price ?? null;
-
-        const bidQuantity =
-          quote
-            ?.depth?.buy?.[0]
-            ?.quantity ?? null;
-
-        const askQuantity =
-          quote
-            ?.depth?.sell?.[0]
-            ?.quantity ?? null;
-
-        const midPrice =
-          bid !== null &&
-          ask !== null &&
-          bid > 0 &&
-          ask > 0
-            ? Number(
-                (
-                  (bid + ask) /
-                  2
-                ).toFixed(2)
-              )
-            : null;
-
-        const spread =
-          bid !== null &&
-          ask !== null &&
-          bid > 0 &&
-          ask > 0
-            ? Number(
-                (
-                  ask - bid
-                ).toFixed(2)
-              )
-            : null;
-
-        const spreadPct =
-          midPrice !== null &&
-          midPrice > 0 &&
-          spread !== null
-            ? Number(
-                (
-                  (spread /
-                    midPrice) *
-                  100
-                ).toFixed(2)
-              )
-            : null;
-
-        // ----------------------------------------------------
-        // Intrinsic value
-        // ----------------------------------------------------
-
-        let intrinsicValue =
-          0;
-
-        if (
-          type === "CE"
-        ) {
-          intrinsicValue =
-            Math.max(
-              0,
-              spot - strike
-            );
-        } else {
-          intrinsicValue =
-            Math.max(
-              0,
-              strike - spot
-            );
-        }
-
-        // ----------------------------------------------------
-        // Time value
-        // ----------------------------------------------------
-
-        const timeValue =
-          ltp !== null
-            ? Number(
-                Math.max(
-                  0,
-                  ltp -
-                    intrinsicValue
-                ).toFixed(2)
-              )
-            : null;
-
-        // ----------------------------------------------------
-        // Moneyness
-        // ----------------------------------------------------
-
-        let moneyness:
-          | "ITM"
-          | "ATM"
-          | "OTM";
-
-        if (
-          Math.abs(
-            strike - atm
-          ) < 0.000001
-        ) {
-          moneyness =
-            "ATM";
-        } else if (
-          type === "CE"
-        ) {
-          moneyness =
-            strike < spot
-              ? "ITM"
-              : "OTM";
-        } else {
-          moneyness =
-            strike > spot
-              ? "ITM"
-              : "OTM";
-        }
-
-        // ----------------------------------------------------
-        // Distance
-        // ----------------------------------------------------
-
-        const distanceFromSpot =
-          Number(
-            (
-              strike -
-              spot
-            ).toFixed(2)
-          );
-
-        const distancePct =
-          Number(
-            (
-              (
-                (
-                  strike -
-                  spot
-                ) /
-                spot
-              ) *
-              100
-            ).toFixed(2)
-          );
-
-        // ----------------------------------------------------
-        // OTM %
-        // ----------------------------------------------------
-
-        let otmPct =
-          0;
-
-        if (
-          type === "CE"
-        ) {
-          otmPct =
-            strike > spot
-              ? Number(
-                  (
-                    (
-                      (
-                        strike -
-                        spot
-                      ) /
-                      spot
-                    ) *
-                    100
-                  ).toFixed(2)
-                )
-              : 0;
-        } else {
-          otmPct =
-            strike < spot
-              ? Number(
-                  (
-                    (
-                      (
-                        spot -
-                        strike
-                      ) /
-                      spot
-                    ) *
-                    100
-                  ).toFixed(2)
-                )
-              : 0;
-        }
-
-        return {
-          ltp,
-
-          bid,
-
-          bid_quantity:
-            bidQuantity,
-
-          ask,
-
-          ask_quantity:
-            askQuantity,
-
-          mid_price:
-            midPrice,
-
-          spread,
-
-          spread_pct:
-            spreadPct,
-
-          moneyness,
-
-          distance_from_spot:
-            distanceFromSpot,
-
-          distance_pct:
-            distancePct,
-
-          otm_pct:
-            otmPct,
-
-          intrinsic_value:
-            Number(
-              intrinsicValue.toFixed(
-                2
-              )
-            ),
-
-          time_value:
-            timeValue,
-
-          oi:
-            quote?.oi ??
-            null,
-
-          volume:
-            quote?.volume ??
-            null,
-
-          oi_day_high:
-            quote
-              ?.oi_day_high ??
-            null,
-
-          oi_day_low:
-            quote
-              ?.oi_day_low ??
-            null,
-
-          net_change:
-            quote
-              ?.net_change ??
-            null,
-        };
-      }
-
-      // ------------------------------------------------------
-      // 13. Build analysed chain
-      // ------------------------------------------------------
-
-      const chain =
-        selectedStrikes.map(
-          (strike) => {
-            const entry =
-              contractsByStrike.get(
-                strike
-              );
-
-            const ceSymbol =
-              entry?.CE
-                ? "NFO:" +
-                  entry.CE
-                    .tradingsymbol
-                : null;
-
-            const peSymbol =
-              entry?.PE
-                ? "NFO:" +
-                  entry.PE
-                    .tradingsymbol
-                : null;
-
-            const ceQuote =
-              ceSymbol
-                ? quoteData
-                    ?.data?.[
-                      ceSymbol
-                    ]
-                : null;
-
-            const peQuote =
-              peSymbol
-                ? quoteData
-                    ?.data?.[
-                      peSymbol
-                    ]
-                : null;
-
-            return {
-              strike,
-
-              CE: entry?.CE
-                ? {
-                    symbol:
-                      entry.CE
-                        .tradingsymbol,
-
-                    instrument_token:
-                      Number(
-                        entry.CE
-                          .instrument_token
-                      ),
-
-                    ...analyseOption(
-                      ceQuote,
-                      strike,
-                      "CE"
-                    ),
-                  }
-                : null,
-
-              PE: entry?.PE
-                ? {
-                    symbol:
-                      entry.PE
-                        .tradingsymbol,
-
-                    instrument_token:
-                      Number(
-                        entry.PE
-                          .instrument_token
-                      ),
-
-                    ...analyseOption(
-                      peQuote,
-                      strike,
-                      "PE"
-                    ),
-                  }
-                : null,
-            };
+      const quoteResponse =
+        await fetch(
+          "https://api.kite.trade/quote?" +
+            query.toString(),
+          {
+            method: "GET",
+            headers: {
+              "X-Kite-Version": "3",
+              Authorization:
+                "token " +
+                env.ZERODHA_API_KEY +
+                ":" +
+                accessToken,
+            },
           }
         );
 
-      // ------------------------------------------------------
-      // 14. Return analysis
-      // ------------------------------------------------------
+      const quoteData =
+        await quoteResponse.json();
+
+      if (!quoteResponse.ok) {
+        throw new Error(
+          "Zerodha option quote API error " +
+            quoteResponse.status +
+            ": " +
+            JSON.stringify(
+              quoteData
+            )
+        );
+      }
+
+      const analysis =
+        selectedContracts.map(
+          (contract) => {
+            const symbol =
+              `NFO:${contract.tradingsymbol}`;
+
+            return analyseOption(
+              quoteData?.data?.[
+                symbol
+              ],
+              contract,
+              spot,
+              atm
+            );
+          }
+        );
 
       return {
         content: [
           {
+            type: "text",
             text: JSON.stringify(
               {
+                status: "success",
+                underlying,
+                spot,
+                expiry:
+                  selectedExpiry,
+                dte,
+                atm,
+                strikes_each_side,
+                contracts:
+                  selectedContracts.length,
+                options:
+                  analysis,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  // --------------------------------------------------
+  // 9. ZERODHA CREDIT SPREAD
+  // --------------------------------------------------
+
+  server.tool(
+    "zerodha_credit_spread",
+    "Analyse a defined-risk NIFTY or BANKNIFTY bull put spread or bear call spread using executable bid/ask prices. Read-only: does not place orders.",
+    {
+      underlying: z.enum([
+        "NIFTY",
+        "BANKNIFTY",
+      ]),
+
+      expiry: z
+        .string()
+        .optional(),
+
+      strategy: z.enum([
+        "BPS",
+        "BCS",
+      ]),
+
+      short_strike: z
+        .number()
+        .positive(),
+
+      spread_width: z
+        .number()
+        .positive(),
+
+      lots: z
+        .number()
+        .int()
+        .positive(),
+    },
+    async ({
+      underlying,
+      expiry,
+      strategy,
+      short_strike,
+      spread_width,
+      lots,
+    }) => {
+      const instruments =
+        await getNfoInstrumentMaster(
+          env
+        );
+
+      const spotSymbol =
+        getSpotSymbol(underlying);
+
+      const spotResponse =
+        await zerodhaGet(
+          env,
+          "/quote",
+          {
+            i: spotSymbol,
+          }
+        );
+
+      const spot =
+        spotResponse?.data?.[
+          spotSymbol
+        ]?.last_price;
+
+      if (
+        typeof spot !== "number"
+      ) {
+        throw new Error(
+          `Unable to obtain spot price for ${underlying}.`
+        );
+      }
+
+      const contracts =
+        instruments.filter(
+          (instrument) =>
+            instrument.name ===
+              underlying &&
+            instrument.segment ===
+              "NFO-OPT" &&
+            (
+              instrument.instrument_type ===
+                "CE" ||
+              instrument.instrument_type ===
+                "PE"
+            )
+        );
+
+      const selectedExpiry =
+        selectExpiry(
+          contracts,
+          expiry
+        );
+
+      const dte =
+        getDte(
+          selectedExpiry
+        );
+
+      const expiryContracts =
+        contracts.filter(
+          (x) =>
+            x.expiry ===
+            selectedExpiry
+        );
+
+      const lotSizes =
+        Array.from(
+          new Set(
+            expiryContracts
+              .map((x) =>
+                Number(
+                  x.lot_size
+                )
+              )
+              .filter(
+                (x) =>
+                  Number.isFinite(x) &&
+                  x > 0
+              )
+          )
+        );
+
+      if (
+        lotSizes.length === 0
+      ) {
+        throw new Error(
+          "Unable to determine lot size from the Zerodha instrument master."
+        );
+      }
+
+      if (
+        lotSizes.length > 1
+      ) {
+        throw new Error(
+          `Multiple lot sizes found for ${underlying}: ${lotSizes.join(", ")}`
+        );
+      }
+
+      const lotSize =
+        lotSizes[0];
+
+      const quantity =
+        lots * lotSize;
+
+      let longStrike: number;
+      let optionType:
+        | "CE"
+        | "PE";
+
+      if (strategy === "BPS") {
+        optionType = "PE";
+        longStrike =
+          short_strike -
+          spread_width;
+      } else {
+        optionType = "CE";
+        longStrike =
+          short_strike +
+          spread_width;
+      }
+
+      const shortContract =
+        expiryContracts.find(
+          (x) =>
+            Number(x.strike) ===
+              short_strike &&
+            x.instrument_type ===
+              optionType
+        );
+
+      const longContract =
+        expiryContracts.find(
+          (x) =>
+            Number(x.strike) ===
+              longStrike &&
+            x.instrument_type ===
+              optionType
+        );
+
+      if (!shortContract) {
+        throw new Error(
+          `Short ${optionType} contract not found at strike ${short_strike} for expiry ${selectedExpiry}.`
+        );
+      }
+
+      if (!longContract) {
+        throw new Error(
+          `Long ${optionType} contract not found at strike ${longStrike} for expiry ${selectedExpiry}.`
+        );
+      }
+
+      const query =
+        new URLSearchParams();
+
+      query.append(
+        "i",
+        `NFO:${shortContract.tradingsymbol}`
+      );
+
+      query.append(
+        "i",
+        `NFO:${longContract.tradingsymbol}`
+      );
+
+      if (!env.ZERODHA_API_KEY) {
+        throw new Error(
+          "ZERODHA_API_KEY secret is not configured."
+        );
+      }
+
+      const accessToken =
+        await getZerodhaAccessToken(
+          env
+        );
+
+      const quoteResponse =
+        await fetch(
+          "https://api.kite.trade/quote?" +
+            query.toString(),
+          {
+            method: "GET",
+            headers: {
+              "X-Kite-Version": "3",
+              Authorization:
+                "token " +
+                env.ZERODHA_API_KEY +
+                ":" +
+                accessToken,
+            },
+          }
+        );
+
+      const quoteData =
+        await quoteResponse.json();
+
+      if (!quoteResponse.ok) {
+        throw new Error(
+          "Zerodha credit spread quote API error " +
+            quoteResponse.status +
+            ": " +
+            JSON.stringify(
+              quoteData
+            )
+        );
+      }
+
+      const shortSymbol =
+        `NFO:${shortContract.tradingsymbol}`;
+
+      const longSymbol =
+        `NFO:${longContract.tradingsymbol}`;
+
+      const shortQuote =
+        quoteData?.data?.[
+          shortSymbol
+        ];
+
+      const longQuote =
+        quoteData?.data?.[
+          longSymbol
+        ];
+
+      const shortBid =
+        shortQuote?.depth?.buy?.[0]
+          ?.price ??
+        null;
+
+      const shortAsk =
+        shortQuote?.depth?.sell?.[0]
+          ?.price ??
+        null;
+
+      const longBid =
+        longQuote?.depth?.buy?.[0]
+          ?.price ??
+        null;
+
+      const longAsk =
+        longQuote?.depth?.sell?.[0]
+          ?.price ??
+        null;
+
+      const shortLtp =
+        shortQuote?.last_price ??
+        null;
+
+      const longLtp =
+        longQuote?.last_price ??
+        null;
+
+      // ------------------------------------------------
+      // Executable credit
+      //
+      // Short leg is sold at bid.
+      // Long leg is bought at ask.
+      // ------------------------------------------------
+
+      const executableCredit =
+        shortBid !== null &&
+        longAsk !== null &&
+        shortBid > 0 &&
+        longAsk > 0
+          ? shortBid - longAsk
+          : null;
+
+      // LTP-based indicative credit is shown
+      // separately and is NOT treated as executable.
+      const indicativeCredit =
+        shortLtp !== null &&
+        longLtp !== null
+          ? shortLtp - longLtp
+          : null;
+
+      const maxProfitPerUnit =
+        executableCredit !== null &&
+        executableCredit > 0
+          ? executableCredit
+          : null;
+
+      const maxLossPerUnit =
+        maxProfitPerUnit !== null
+          ? spread_width -
+            maxProfitPerUnit
+          : null;
+
+      let breakeven: number | null =
+        null;
+
+      let beDistance: number | null =
+        null;
+
+      let beDistancePct:
+        | number
+        | null = null;
+
+      if (
+        maxProfitPerUnit !== null
+      ) {
+        if (strategy === "BPS") {
+          breakeven =
+            short_strike -
+            maxProfitPerUnit;
+
+          beDistance =
+            spot -
+            breakeven;
+        } else {
+          breakeven =
+            short_strike +
+            maxProfitPerUnit;
+
+          beDistance =
+            breakeven -
+            spot;
+        }
+
+        beDistancePct =
+          (beDistance / spot) *
+          100;
+      }
+
+      const maxProfitTotal =
+        maxProfitPerUnit !== null
+          ? maxProfitPerUnit *
+            quantity
+          : null;
+
+      const maxLossTotal =
+        maxLossPerUnit !== null
+          ? maxLossPerUnit *
+            quantity
+          : null;
+
+      const roiPct =
+        maxLossPerUnit !== null &&
+        maxLossPerUnit > 0 &&
+        maxProfitPerUnit !== null
+          ? (maxProfitPerUnit /
+              maxLossPerUnit) *
+            100
+          : null;
+
+      const shortStrikeDistance =
+        strategy === "BPS"
+          ? spot -
+            short_strike
+          : short_strike -
+            spot;
+
+      const shortStrikeDistancePct =
+        (shortStrikeDistance /
+          spot) *
+        100;
+
+      const shortBidQuantity =
+        shortQuote?.depth?.buy?.[0]
+          ?.quantity ??
+        null;
+
+      const shortAskQuantity =
+        shortQuote?.depth?.sell?.[0]
+          ?.quantity ??
+        null;
+
+      const longBidQuantity =
+        longQuote?.depth?.buy?.[0]
+          ?.quantity ??
+        null;
+
+      const longAskQuantity =
+        longQuote?.depth?.sell?.[0]
+          ?.quantity ??
+        null;
+
+      const shortSpread =
+        shortBid !== null &&
+        shortAsk !== null &&
+        shortBid > 0 &&
+        shortAsk > 0
+          ? shortAsk -
+            shortBid
+          : null;
+
+      const longSpread =
+        longBid !== null &&
+        longAsk !== null &&
+        longBid > 0 &&
+        longAsk > 0
+          ? longAsk -
+            longBid
+          : null;
+
+      const validExecutableCredit =
+        executableCredit !== null &&
+        executableCredit > 0;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                status: "success",
+
                 underlying,
 
-                spot,
+                spot:
+                  round2(spot),
 
                 expiry:
                   selectedExpiry,
 
                 dte,
 
-                atm,
+                strategy,
 
-                strikes_each_side:
-                  strikeCount,
+                option_type:
+                  optionType,
 
-                contracts:
-                  chain.length,
+                short_strike,
 
-                chain,
+                long_strike:
+                  longStrike,
+
+                spread_width,
+
+                lot_size:
+                  lotSize,
+
+                lots,
+
+                quantity,
+
+                short_leg: {
+                  symbol:
+                    shortContract.tradingsymbol,
+
+                  strike:
+                    short_strike,
+
+                  side: "SELL",
+
+                  ltp:
+                    round2(
+                      shortLtp
+                    ),
+
+                  bid:
+                    round2(
+                      shortBid
+                    ),
+
+                  bid_quantity:
+                    shortBidQuantity,
+
+                  ask:
+                    round2(
+                      shortAsk
+                    ),
+
+                  ask_quantity:
+                    shortAskQuantity,
+
+                  bid_ask_spread:
+                    round2(
+                      shortSpread
+                    ),
+
+                  oi:
+                    shortQuote?.oi ??
+                    null,
+
+                  volume:
+                    shortQuote?.volume ??
+                    null,
+                },
+
+                long_leg: {
+                  symbol:
+                    longContract.tradingsymbol,
+
+                  strike:
+                    longStrike,
+
+                  side: "BUY",
+
+                  ltp:
+                    round2(
+                      longLtp
+                    ),
+
+                  bid:
+                    round2(
+                      longBid
+                    ),
+
+                  bid_quantity:
+                    longBidQuantity,
+
+                  ask:
+                    round2(
+                      longAsk
+                    ),
+
+                  ask_quantity:
+                    longAskQuantity,
+
+                  bid_ask_spread:
+                    round2(
+                      longSpread
+                    ),
+
+                  oi:
+                    longQuote?.oi ??
+                    null,
+
+                  volume:
+                    longQuote?.volume ??
+                    null,
+                },
+
+                pricing: {
+                  executable_credit:
+                    round2(
+                      executableCredit
+                    ),
+
+                  indicative_credit_ltp:
+                    round2(
+                      indicativeCredit
+                    ),
+
+                  executable:
+                    validExecutableCredit,
+
+                  pricing_method:
+                    "SELL short leg at bid; BUY long leg at ask",
+                },
+
+                risk: {
+                  max_profit_per_unit:
+                    round2(
+                      maxProfitPerUnit
+                    ),
+
+                  max_loss_per_unit:
+                    round2(
+                      maxLossPerUnit
+                    ),
+
+                  max_profit_total:
+                    round2(
+                      maxProfitTotal
+                    ),
+
+                  max_loss_total:
+                    round2(
+                      maxLossTotal
+                    ),
+
+                  breakeven:
+                    round2(
+                      breakeven
+                    ),
+
+                  breakeven_distance:
+                    round2(
+                      beDistance
+                    ),
+
+                  breakeven_distance_pct:
+                    round2(
+                      beDistancePct
+                    ),
+
+                  short_strike_distance:
+                    round2(
+                      shortStrikeDistance
+                    ),
+
+                  short_strike_distance_pct:
+                    round2(
+                      shortStrikeDistancePct
+                    ),
+
+                  max_profit_to_max_loss_pct:
+                    round2(
+                      roiPct
+                    ),
+                },
+
+                liquidity: {
+                  short_leg_bid_quantity:
+                    shortBidQuantity,
+
+                  short_leg_ask_quantity:
+                    shortAskQuantity,
+
+                  long_leg_bid_quantity:
+                    longBidQuantity,
+
+                  long_leg_ask_quantity:
+                    longAskQuantity,
+
+                  sufficient_live_depth:
+                    shortBid !== null &&
+                    longAsk !== null &&
+                    shortBid > 0 &&
+                    longAsk > 0,
+                },
+
+                read_only: true,
+
+                note:
+                  "This tool analyses the spread only. It does not place, modify or cancel any Zerodha order.",
               },
               null,
               2
             ),
-
-            type: "text",
           },
         ],
       };
     }
   );
 
-  // ==========================================================
-  // POSITIONS
-  // ==========================================================
+  // --------------------------------------------------
+  // 10. ZERODHA POSITIONS
+  // --------------------------------------------------
 
-  server.registerTool(
+  server.tool(
     "zerodha_positions",
-    {
-      description:
-        "Read current Zerodha day and net positions. Read-only.",
-    },
+    "Read current Zerodha positions.",
+    {},
+    async () => {
+      const data =
+        await zerodhaGet(
+          env,
+          "/portfolio/positions"
+        );
 
-    async () => ({
-      content: [
-        {
-          text: JSON.stringify(
-            await zerodhaGet(
-              "/portfolio/positions",
-              env
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              data,
+              null,
+              2
             ),
-            null,
-            2
-          ),
-
-          type: "text",
-        },
-      ],
-    })
+          },
+        ],
+      };
+    }
   );
 
-  // ==========================================================
-  // HOLDINGS
-  // ==========================================================
+  // --------------------------------------------------
+  // 11. ZERODHA HOLDINGS
+  // --------------------------------------------------
 
-  server.registerTool(
+  server.tool(
     "zerodha_holdings",
-    {
-      description:
-        "Read current Zerodha equity holdings. Read-only.",
-    },
+    "Read current Zerodha holdings.",
+    {},
+    async () => {
+      const data =
+        await zerodhaGet(
+          env,
+          "/portfolio/holdings"
+        );
 
-    async () => ({
-      content: [
-        {
-          text: JSON.stringify(
-            await zerodhaGet(
-              "/portfolio/holdings",
-              env
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              data,
+              null,
+              2
             ),
-            null,
-            2
-          ),
-
-          type: "text",
-        },
-      ],
-    })
+          },
+        ],
+      };
+    }
   );
 
-  // ==========================================================
-  // ORDERS
-  // ==========================================================
+  // --------------------------------------------------
+  // 12. ZERODHA ORDERS
+  // --------------------------------------------------
 
-  server.registerTool(
+  server.tool(
     "zerodha_orders",
-    {
-      description:
-        "Read all Zerodha orders for the current trading day. Read-only.",
-    },
+    "Read all current Zerodha orders for today.",
+    {},
+    async () => {
+      const data =
+        await zerodhaGet(
+          env,
+          "/orders"
+        );
 
-    async () => ({
-      content: [
-        {
-          text: JSON.stringify(
-            await zerodhaGet(
-              "/orders",
-              env
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              data,
+              null,
+              2
             ),
-            null,
-            2
-          ),
-
-          type: "text",
-        },
-      ],
-    })
+          },
+        ],
+      };
+    }
   );
 
-  // ==========================================================
-  // TRADES
-  // ==========================================================
+  // --------------------------------------------------
+  // 13. ZERODHA TRADES
+  // --------------------------------------------------
 
-  server.registerTool(
+  server.tool(
     "zerodha_trades",
-    {
-      description:
-        "Read all Zerodha trades for the current trading day. Read-only.",
-    },
+    "Read all executed Zerodha trades for today.",
+    {},
+    async () => {
+      const data =
+        await zerodhaGet(
+          env,
+          "/trades"
+        );
 
-    async () => ({
-      content: [
-        {
-          text: JSON.stringify(
-            await zerodhaGet(
-              "/trades",
-              env
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              data,
+              null,
+              2
             ),
-            null,
-            2
-          ),
-
-          type: "text",
-        },
-      ],
-    })
+          },
+        ],
+      };
+    }
   );
 
-  // ==========================================================
-  // ORDER HISTORY
-  // ==========================================================
+  // --------------------------------------------------
+  // 14. ZERODHA ORDER HISTORY
+  // --------------------------------------------------
 
-  server.registerTool(
+  server.tool(
     "zerodha_order_history",
+    "Read the order history for a specific Zerodha order.",
     {
-      description:
-        "Read the history of a specific Zerodha order. Read-only.",
-
-      inputSchema: {
-        order_id:
-          z.string(),
-      },
+      order_id: z
+        .string()
+        .min(1),
     },
-
     async ({
       order_id,
-    }) => ({
-      content: [
-        {
-          text: JSON.stringify(
-            await zerodhaGet(
-              "/orders/" +
-                encodeURIComponent(
-                  order_id
-                ),
-              env
-            ),
-            null,
-            2
-          ),
+    }) => {
+      const data =
+        await zerodhaGet(
+          env,
+          `/orders/${encodeURIComponent(
+            order_id
+          )}`
+        );
 
-          type: "text",
-        },
-      ],
-    })
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              data,
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
   );
 
   return server;
 }
 
-// ============================================================
+// --------------------------------------------------
 // WORKER ENTRY POINT
-// ============================================================
+// --------------------------------------------------
 
 export default {
   async fetch(
-    request,
-    env,
-    ctx
-  ) {
+    request: Request,
+    env: Env
+  ): Promise<Response> {
     const url =
       new URL(request.url);
 
     if (
       url.pathname ===
-        "/login" ||
-      url.pathname ===
-        "/callback"
+      "/login"
     ) {
       return handleZerodhaLogin(
         request,
@@ -2387,13 +2318,26 @@ export default {
       );
     }
 
-    return createMcpHandler(
-      () =>
-        createServer(env)
-    )(
-      request,
-      env,
-      ctx
+    if (
+      url.pathname ===
+      "/callback"
+    ) {
+      return handleZerodhaCallback(
+        request,
+        env
+      );
+    }
+
+    const server =
+      createServer(env);
+
+    const handler =
+      createMcpHandler(
+        server
+      );
+
+    return handler(
+      request
     );
   },
-} satisfies ExportedHandler<Env>;
+};
