@@ -2881,23 +2881,21 @@ function createServer(
     "zerodha_credit_spread_scan",
     {
       description:
-        "Scan a NIFTY or BANKNIFTY expiry for defined-risk Bull Put Spreads (BPS) or Bear Call Spreads (BCS). Uses live bid/ask pricing when available, returns indicative LTP pricing when the market is closed, and never places, modifies or cancels orders.",
+        "Scan NIFTY or BANKNIFTY defined-risk credit spreads for a selected OTM range and spread width. Returns conservative execution pricing using short-leg bid and long-leg ask, required quantity, available execution-side depth, credit-to-width, bid-ask cost, breakeven and defined risk. Read-only.",
 
       inputSchema: {
-        underlying:
-          z.enum([
-            "NIFTY",
-            "BANKNIFTY",
-          ]),
+        underlying: z.enum([
+          "NIFTY",
+          "BANKNIFTY",
+        ]),
 
         expiry:
           z.string().optional(),
 
-        strategy:
-          z.enum([
-            "BPS",
-            "BCS",
-          ]),
+        strategy: z.enum([
+          "BPS",
+          "BCS",
+        ]),
 
         spread_width:
           z.number().positive(),
@@ -2911,6 +2909,13 @@ function createServer(
         max_otm_pct:
           z
             .number()
+            .positive()
+            .optional(),
+
+        lots:
+          z
+            .number()
+            .int()
             .positive()
             .optional(),
 
@@ -2931,12 +2936,41 @@ function createServer(
       spread_width,
       min_otm_pct,
       max_otm_pct,
+      lots,
       max_candidates,
     }) => {
+      const minOtmPct =
+        min_otm_pct ?? 1.0;
+
+      const maxOtmPct =
+        max_otm_pct ?? 2.5;
+
+      const requestedLots =
+        lots ?? 1;
+
+      const maxCandidates =
+        max_candidates ?? 20;
+
+      if (
+        minOtmPct >= maxOtmPct
+      ) {
+        throw new Error(
+          "min_otm_pct must be less than max_otm_pct."
+        );
+      }
+
+      // ------------------------------------------------------
+      // Instrument master
+      // ------------------------------------------------------
+
       const instruments =
         await getNfoInstrumentMaster(
           env
         );
+
+      // ------------------------------------------------------
+      // Spot
+      // ------------------------------------------------------
 
       const spotSymbol =
         underlying ===
@@ -2964,13 +2998,17 @@ function createServer(
         spot <= 0
       ) {
         throw new Error(
-          "Unable to obtain spot price for " +
+          "Unable to obtain live " +
             underlying +
-            "."
+            " spot price."
         );
       }
 
-      const contracts =
+      // ------------------------------------------------------
+      // Option contracts
+      // ------------------------------------------------------
+
+      const optionContracts =
         instruments.filter(
           (instrument) =>
             instrument.name ===
@@ -2979,167 +3017,103 @@ function createServer(
               "NFO-OPT" &&
             (
               instrument.instrument_type ===
-                "CE" ||
-              instrument.instrument_type ===
-                "PE"
+                (
+                  strategy ===
+                  "BPS"
+                    ? "PE"
+                    : "CE"
+                )
             )
         );
 
-      const expiries =
-        Array.from(
-          new Set(
-            contracts
-              .map(
-                (x) =>
-                  x.expiry
-              )
-              .filter(Boolean)
-          )
-        ).sort();
-
       if (
-        expiries.length ===
+        optionContracts.length ===
         0
       ) {
         throw new Error(
-          "No option expiries found for " +
+          "No option contracts found for " +
+            underlying +
+            " " +
+            strategy +
+            "."
+        );
+      }
+
+      // ------------------------------------------------------
+      // Expiry
+      // ------------------------------------------------------
+
+      const today =
+        new Date()
+          .toISOString()
+          .slice(0, 10);
+
+      const expiryList = [
+        ...new Set(
+          optionContracts.map(
+            (instrument) =>
+              instrument.expiry
+          )
+        ),
+      ]
+        .filter(
+          (date) =>
+            date >= today
+        )
+        .sort();
+
+      if (
+        expiryList.length === 0
+      ) {
+        throw new Error(
+          "No current or future expiry found for " +
             underlying +
             "."
         );
       }
 
-      let selectedExpiry =
-        expiry;
+      const selectedExpiry =
+        !expiry ||
+        expiry === "nearest"
+          ? expiryList[0]
+          : expiry;
 
       if (
-        !selectedExpiry ||
-        selectedExpiry ===
-          "nearest"
-      ) {
-        const now =
-          new Date();
-
-        const futureExpiries =
-          expiries.filter(
-            (x) =>
-              new Date(
-                x +
-                  "T23:59:59+05:30"
-              ) >= now
-          );
-
-        if (
-          futureExpiries.length ===
-          0
-        ) {
-          throw new Error(
-            "No future option expiry found."
-          );
-        }
-
-        selectedExpiry =
-          futureExpiries[0];
-      }
-
-      if (
-        !expiries.includes(
+        !expiryList.includes(
           selectedExpiry
         )
       ) {
         throw new Error(
-          "Expiry " +
+          "Invalid expiry " +
             selectedExpiry +
-            " was not found."
+            ". Available expiries: " +
+            expiryList
+              .slice(0, 10)
+              .join(", ")
         );
       }
 
       const expiryContracts =
-        contracts.filter(
-          (x) =>
-            x.expiry ===
+        optionContracts.filter(
+          (instrument) =>
+            instrument.expiry ===
             selectedExpiry
         );
 
-      const lotSizes =
-        Array.from(
-          new Set(
-            expiryContracts
-              .map((x) =>
-                Number(
-                  x.lot_size
-                )
-              )
-              .filter(
-                (x) =>
-                  Number.isFinite(
-                    x
-                  ) &&
-                  x > 0
-              )
-          )
-        );
-
-      if (
-        lotSizes.length !==
-        1
-      ) {
-        throw new Error(
-          "Unable to determine a unique lot size for " +
-            underlying +
-            "."
-        );
-      }
-
-      const lotSize =
-        lotSizes[0];
-
-      const minOtmPct =
-        min_otm_pct ??
-        1.0;
-
-      const maxOtmPct =
-        max_otm_pct ??
-        2.5;
-
-      if (
-        minOtmPct >
-        maxOtmPct
-      ) {
-        throw new Error(
-          "min_otm_pct cannot be greater than max_otm_pct."
-        );
-      }
-
-      const maxCandidates =
-        max_candidates ??
-        20;
-
-      const optionType =
-        strategy ===
-        "BPS"
-          ? "PE"
-          : "CE";
+      // ------------------------------------------------------
+      // Strike map
+      // ------------------------------------------------------
 
       const strikeMap =
         new Map<
           number,
-          Record<
-            string,
-            string
-          >
+          Record<string, string>
         >();
 
       for (
         const instrument of
           expiryContracts
       ) {
-        if (
-          instrument.instrument_type !==
-          optionType
-        ) {
-          continue;
-        }
-
         const strike =
           Number(
             instrument.strike
@@ -3244,12 +3218,52 @@ function createServer(
             ): item is NonNullable<
               typeof item
             > =>
-              item !==
-              null
+              item !== null
+          )
+          .sort(
+            (a, b) =>
+              a.shortOtmPct -
+              b.shortOtmPct
           );
 
+      const lotSize =
+        Number(
+          expiryContracts[0]
+            ?.lot_size
+        );
+
       if (
-        eligible.length ===
+        !Number.isFinite(
+          lotSize
+        ) ||
+        lotSize <= 0
+      ) {
+        throw new Error(
+          "Unable to determine the lot size for " +
+            underlying +
+            " " +
+            selectedExpiry +
+            "."
+        );
+      }
+
+      const requiredQuantity =
+        requestedLots *
+        lotSize;
+
+      // Only quote as many candidates as the caller requested.
+      // A hard cap of 50 protects the Zerodha quote request.
+      const scanCandidates =
+        eligible.slice(
+          0,
+          Math.min(
+            50,
+            maxCandidates
+          )
+        );
+
+      if (
+        scanCandidates.length ===
         0
       ) {
         return {
@@ -3270,17 +3284,40 @@ function createServer(
                     selectedExpiry,
                   strategy,
                   spread_width,
+                  dte:
+                    Math.max(
+                      0,
+                      Math.ceil(
+                        (
+                          new Date(
+                            selectedExpiry +
+                              "T15:30:00+05:30"
+                          ).getTime() -
+                          Date.now()
+                        ) /
+                          (
+                            24 *
+                            60 *
+                            60 *
+                            1000
+                          )
+                      )
+                    ),
+                  lots:
+                    requestedLots,
+                  lot_size:
+                    lotSize,
+                  quantity:
+                    requiredQuantity,
                   min_otm_pct:
                     minOtmPct,
                   max_otm_pct:
                     maxOtmPct,
-                  lot_size:
-                    lotSize,
-                  quantity_per_lot:
-                    lotSize,
-                  candidates: [],
-                  candidate_count:
+                  candidates_scanned:
                     0,
+                  candidates_returned:
+                    0,
+                  candidates: [],
                   message:
                     "No candidate spreads matched the supplied OTM range and spread width.",
                   read_only:
@@ -3296,20 +3333,9 @@ function createServer(
         };
       }
 
-      const scanCandidates =
-        eligible
-          .sort(
-            (a, b) =>
-              a.shortOtmPct -
-              b.shortOtmPct
-          )
-          .slice(
-            0,
-            Math.min(
-              50,
-              eligible.length
-            )
-          );
+      // ------------------------------------------------------
+      // Quotes
+      // ------------------------------------------------------
 
       const quoteParams =
         new URLSearchParams();
@@ -3356,6 +3382,10 @@ function createServer(
                 2
               )
             );
+
+      // ------------------------------------------------------
+      // Candidate analysis
+      // ------------------------------------------------------
 
       const results =
         scanCandidates.map(
@@ -3408,6 +3438,30 @@ function createServer(
                 ?.price ??
               null;
 
+            const shortBidQty =
+              shortQuote
+                ?.depth?.buy?.[0]
+                ?.quantity ??
+              null;
+
+            const shortAskQty =
+              shortQuote
+                ?.depth?.sell?.[0]
+                ?.quantity ??
+              null;
+
+            const longBidQty =
+              longQuote
+                ?.depth?.buy?.[0]
+                ?.quantity ??
+              null;
+
+            const longAskQty =
+              longQuote
+                ?.depth?.sell?.[0]
+                ?.quantity ??
+              null;
+
             const shortLtp =
               shortQuote
                 ?.last_price ??
@@ -3418,6 +3472,8 @@ function createServer(
                 ?.last_price ??
               null;
 
+            // Conservative executable pricing:
+            // sell short leg at bid and buy long leg at ask.
             const executableCredit =
               shortBid !==
                 null &&
@@ -3438,14 +3494,69 @@ function createServer(
                   longLtp
                 : null;
 
-            const quantity =
-              lotSize;
+            const twoLegBidAskWidth =
+              shortBid !==
+                null &&
+              shortAsk !==
+                null &&
+              longBid !==
+                null &&
+              longAsk !==
+                null &&
+              shortBid > 0 &&
+              shortAsk > 0 &&
+              longBid > 0 &&
+              longAsk > 0
+                ? (
+                    (
+                      shortAsk -
+                      shortBid
+                    ) +
+                    (
+                      longAsk -
+                      longBid
+                    )
+                  )
+                : null;
+
+            const executionSlippageVsLtp =
+              indicativeCredit !==
+                null &&
+              executableCredit !==
+                null
+                ? indicativeCredit -
+                  executableCredit
+                : null;
+
+            const executionPricesAvailable =
+              shortBid !==
+                null &&
+              longAsk !==
+                null &&
+              shortBid > 0 &&
+              longAsk > 0;
+
+            const executionDepthAvailable =
+              shortBidQty !==
+                null &&
+              longAskQty !==
+                null &&
+              shortBidQty > 0 &&
+              longAskQty > 0;
+
+            const depthSupported =
+              executionDepthAvailable &&
+              shortBidQty >=
+                requiredQuantity &&
+              longAskQty >=
+                requiredQuantity;
 
             const maxProfitPerUnit =
               executableCredit !==
                 null &&
-              executableCredit >
-                0
+              executableCredit > 0 &&
+              executableCredit <
+                spread_width
                 ? executableCredit
                 : null;
 
@@ -3495,55 +3606,60 @@ function createServer(
                 100;
             }
 
-            const sufficientLiveDepth =
-              shortBid !==
-                null &&
-              shortAsk !==
-                null &&
-              longBid !==
-                null &&
-              longAsk !==
-                null &&
-              shortBid > 0 &&
-              shortAsk > 0 &&
-              longBid > 0 &&
-              longAsk > 0;
-
             let status =
               "NO_LIVE_DEPTH";
 
             if (
+              !executionPricesAvailable
+            ) {
+              status =
+                "NO_LIVE_DEPTH";
+            } else if (
+              !executionDepthAvailable
+            ) {
+              status =
+                "NO_LIVE_DEPTH";
+            } else if (
+              !depthSupported
+            ) {
+              status =
+                "INSUFFICIENT_DEPTH";
+            } else if (
               executableCredit !==
                 null &&
-              executableCredit >
+              executableCredit <=
                 0
             ) {
               status =
-                "EXECUTABLE";
+                "NON_POSITIVE_CREDIT";
             } else if (
-              shortBid !==
+              executableCredit !==
                 null &&
-              longAsk !==
-                null &&
-              shortBid > 0 &&
-              longAsk > 0
+              executableCredit >=
+                spread_width
             ) {
               status =
-                "NON_POSITIVE_CREDIT";
+                "INVALID_CREDIT";
+            } else {
+              status =
+                "EXECUTABLE";
             }
 
             return {
               short_strike:
                 candidate
                   .shortStrike,
+
               long_strike:
                 candidate
                   .longStrike,
+
               short_strike_otm_pct:
                 round2(
                   candidate
                     .shortOtmPct
                 ),
+
               short_strike_distance:
                 round2(
                   strategy ===
@@ -3555,143 +3671,228 @@ function createServer(
                         .shortStrike -
                       spot
                 ),
+
               short_strike_distance_pct:
                 round2(
                   candidate
                     .shortOtmPct
                 ),
+
               short_leg: {
                 symbol:
                   candidate
                     .shortContract
                     .tradingsymbol,
+
                 ltp:
                   round2(
                     shortLtp
                   ),
+
                 bid:
                   round2(
                     shortBid
                   ),
+
                 ask:
                   round2(
                     shortAsk
                   ),
+
                 bid_quantity:
-                  shortQuote
-                    ?.depth?.buy?.[0]
-                    ?.quantity ??
-                  null,
+                  shortBidQty,
+
                 ask_quantity:
-                  shortQuote
-                    ?.depth?.sell?.[0]
-                    ?.quantity ??
-                  null,
+                  shortAskQty,
+
                 oi:
                   shortQuote?.oi ??
                   null,
+
                 volume:
                   shortQuote
                     ?.volume ??
                   null,
               },
+
               long_leg: {
                 symbol:
                   candidate
                     .longContract
                     .tradingsymbol,
+
                 ltp:
                   round2(
                     longLtp
                   ),
+
                 bid:
                   round2(
                     longBid
                   ),
+
                 ask:
                   round2(
                     longAsk
                   ),
+
                 bid_quantity:
-                  longQuote
-                    ?.depth?.buy?.[0]
-                    ?.quantity ??
-                  null,
+                  longBidQty,
+
                 ask_quantity:
-                  longQuote
-                    ?.depth?.sell?.[0]
-                    ?.quantity ??
-                  null,
+                  longAskQty,
+
                 oi:
                   longQuote?.oi ??
                   null,
+
                 volume:
                   longQuote
                     ?.volume ??
                   null,
               },
+
               pricing: {
                 executable_credit:
                   round2(
                     executableCredit
                   ),
+
                 indicative_credit_ltp:
                   round2(
                     indicativeCredit
                   ),
+
+                credit_to_width_pct:
+                  round2(
+                    executableCredit !==
+                      null
+                      ? (
+                          executableCredit /
+                          spread_width
+                        ) *
+                        100
+                      : null
+                  ),
+
+                indicative_credit_to_width_pct:
+                  round2(
+                    indicativeCredit !==
+                      null
+                      ? (
+                          indicativeCredit /
+                          spread_width
+                        ) *
+                        100
+                      : null
+                  ),
+
+                two_leg_bid_ask_width:
+                  round2(
+                    twoLegBidAskWidth
+                  ),
+
+                execution_slippage_vs_ltp:
+                  round2(
+                    executionSlippageVsLtp
+                  ),
+
                 executable:
-                  executableCredit !==
-                    null &&
-                  executableCredit >
-                    0,
+                  status ===
+                  "EXECUTABLE",
+
                 pricing_method:
                   "SELL short leg at bid; BUY long leg at ask",
               },
+
+              quantity: {
+                lots:
+                  requestedLots,
+
+                lot_size:
+                  lotSize,
+
+                required_quantity:
+                  requiredQuantity,
+              },
+
+              liquidity: {
+                execution_side:
+                  strategy ===
+                  "BPS"
+                    ? "short PE bid + long PE ask"
+                    : "short CE bid + long CE ask",
+
+                short_bid_quantity:
+                  shortBidQty,
+
+                long_ask_quantity:
+                  longAskQty,
+
+                required_quantity:
+                  requiredQuantity,
+
+                depth_supported:
+                  depthSupported,
+
+                execution_prices_available:
+                  executionPricesAvailable,
+
+                execution_depth_available:
+                  executionDepthAvailable,
+              },
+
               risk: {
                 max_profit_per_unit:
                   round2(
                     maxProfitPerUnit
                   ),
+
                 max_loss_per_unit:
                   round2(
                     maxLossPerUnit
                   ),
+
                 max_profit_total:
                   round2(
                     maxProfitPerUnit !==
                       null
                       ? maxProfitPerUnit *
-                        quantity
+                        requiredQuantity
                       : null
                   ),
+
                 max_loss_total:
                   round2(
                     maxLossPerUnit !==
                       null
                       ? maxLossPerUnit *
-                        quantity
+                        requiredQuantity
                       : null
                   ),
+
                 breakeven:
                   round2(
                     breakeven
                   ),
+
                 breakeven_distance:
                   round2(
                     beDistance
                   ),
+
                 breakeven_distance_pct:
                   round2(
                     beDistancePct
                   ),
+
                 max_profit_to_max_loss_pct:
                   round2(
                     maxProfitPerUnit !==
                       null &&
                     maxLossPerUnit !==
                       null &&
-                    maxLossPerUnit >
-                      0
+                    maxLossPerUnit > 0
                       ? (
                           maxProfitPerUnit /
                           maxLossPerUnit
@@ -3700,11 +3901,9 @@ function createServer(
                       : null
                   ),
               },
-              liquidity: {
-                sufficient_live_depth:
-                  sufficientLiveDepth,
-              },
+
               status,
+
               read_only:
                 true,
             };
@@ -3738,42 +3937,54 @@ function createServer(
               {
                 status:
                   "success",
+
                 underlying,
+
                 spot:
                   round2(
                     spot
                   ),
+
                 expiry:
                   selectedExpiry,
+
                 strategy,
+
                 spread_width,
+
                 dte,
+
+                lots:
+                  requestedLots,
+
                 lot_size:
                   lotSize,
-                quantity_per_lot:
-                  lotSize,
+
+                quantity:
+                  requiredQuantity,
+
                 min_otm_pct:
                   minOtmPct,
+
                 max_otm_pct:
                   maxOtmPct,
+
                 candidates_scanned:
-                  results.length,
+                  scanCandidates.length,
+
                 candidates_returned:
-                  Math.min(
-                    maxCandidates,
-                    results.length
-                  ),
+                  results.length,
+
                 candidates:
-                  results.slice(
-                    0,
-                    maxCandidates
-                  ),
+                  results,
+
                 read_only:
                   true,
               },
               null,
               2
             ),
+
             type:
               "text",
           },
@@ -3782,8 +3993,6 @@ function createServer(
     }
   );
 
-
-  // ==========================================================
   // POSITIONS
   // ==========================================================
 
