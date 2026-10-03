@@ -209,6 +209,32 @@ function createServer(env: Env) {
 
 
   server.registerTool(
+    "zerodha_quote",
+    {
+      description: "Read live Zerodha market quotes for one or more exchange-qualified trading symbols. Read-only.",
+      inputSchema: {
+        symbols: z.array(z.string().min(1)).min(1).max(50),
+      },
+    },
+    async ({ symbols }) => {
+      const params = new URLSearchParams();
+      for (const symbol of symbols) {
+        params.append("i", symbol);
+      }
+      return {
+        content: [{
+          text: JSON.stringify(
+            await zerodhaGet("/quote?" + params.toString(), env),
+            null,
+            2
+          ),
+          type: "text",
+        }],
+      };
+    }
+  );
+
+  server.registerTool(
     "zerodha_positions",
     {
       description: "Read current Zerodha day and net positions. Read-only.",
