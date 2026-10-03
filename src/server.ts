@@ -3276,6 +3276,8 @@ function createServer(
                     maxOtmPct,
                   lot_size:
                     lotSize,
+                  quantity_per_lot:
+                    lotSize,
                   candidates: [],
                   candidate_count:
                     0,
@@ -3747,6 +3749,8 @@ function createServer(
                 spread_width,
                 dte,
                 lot_size:
+                  lotSize,
+                quantity_per_lot:
                   lotSize,
                 min_otm_pct:
                   minOtmPct,
