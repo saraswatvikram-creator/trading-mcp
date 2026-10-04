@@ -403,7 +403,7 @@ export function registerFivePaisaTools(
       const [marginResponse, positionResponse, orderResponse, tradeResponse] =
         await Promise.all([
           fivePaisaPost(env, "/V4/Margin", {}),
-          fivePaisaPost(env, "/V3/NetPositionNetWise", {}),
+          fivePaisaPost(env, "/V2/NetPositionNetWise", {}),
           fivePaisaPost(env, "/V4/OrderBook", {}),
           fivePaisaPost(env, "/V1/TradeBook", {}),
         ]);
@@ -489,7 +489,7 @@ export function registerFivePaisaTools(
 
       const tests: Array<[string, string, Record<string, unknown>]> = [
         ["margin", "/V4/Margin", {}],
-        ["positions", "/V3/NetPositionNetWise", {}],
+        ["positions", "/V2/NetPositionNetWise", {}],
         ["orders", "/V4/OrderBook", {}],
         ["trades", "/V1/TradeBook", {}],
       ];
@@ -565,8 +565,12 @@ export async function handleFivePaisaCallback(
 ): Promise<Response> {
   try {
     const url = new URL(request.url);
-    const requestToken = url.searchParams.get("RequestToken");
-    const state = url.searchParams.get("state");
+    const requestToken =
+      url.searchParams.get("RequestToken") ??
+      url.searchParams.get("requestToken");
+    const state =
+      url.searchParams.get("state") ??
+      url.searchParams.get("State");
 
     if (!requestToken) {
       return new Response(
