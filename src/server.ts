@@ -3993,6 +3993,7 @@ function createServer(
     }
   );
 
+
   // ==========================================================
   // CREDIT SPREAD POSITIONS
   // ==========================================================
@@ -4004,25 +4005,13 @@ function createServer(
         "Reconstruct current Zerodha net option positions into logical defined-risk credit spreads using the frozen matching rules. Read-only.",
     },
     async () => {
-      const positionsData = (await zerodhaGet(
-        "/portfolio/positions",
-        env
-      )) as any;
+      const positionsData = (await zerodhaGet("/portfolio/positions", env)) as any;
+      const netPositions = positionsData?.data?.net ?? [];
+      const instruments = await getNfoInstrumentMaster(env);
 
-      const netPositions =
-        positionsData?.data?.net ?? [];
-
-      const instruments =
-        await getNfoInstrumentMaster(env);
-
-      const instrumentBySymbol =
-        new Map<string, Record<string, string>>();
-
+      const instrumentBySymbol = new Map<string, Record<string, string>>();
       for (const instrument of instruments) {
-        instrumentBySymbol.set(
-          instrument.tradingsymbol,
-          instrument
-        );
+        instrumentBySymbol.set(instrument.tradingsymbol, instrument);
       }
 
       const widthByUnderlying: Record<string, number> = {
@@ -4030,19 +4019,16 @@ function createServer(
         BANKNIFTY: 1000,
       };
 
-      const optionPositions =
-        netPositions.filter((p: any) => {
-          const instrument =
-            instrumentBySymbol.get(p.tradingsymbol);
-
-          return Boolean(
-            instrument &&
-            instrument.segment === "NFO-OPT" &&
-            (instrument.instrument_type === "CE" ||
-              instrument.instrument_type === "PE") &&
-            Number(p.quantity) !== 0
-          );
-        });
+      const optionPositions = netPositions.filter((p: any) => {
+        const instrument = instrumentBySymbol.get(p.tradingsymbol);
+        return Boolean(
+          instrument &&
+          instrument.segment === "NFO-OPT" &&
+          (instrument.instrument_type === "CE" ||
+            instrument.instrument_type === "PE") &&
+          Number(p.quantity) !== 0
+        );
+      });
 
       const usedSymbols = new Set<string>();
       const trades: any[] = [];
@@ -4053,12 +4039,9 @@ function createServer(
           ? null
           : Number(value.toFixed(2));
 
-      const spotCache =
-        new Map<string, number | null>();
+      const spotCache = new Map<string, number | null>();
 
-      const getSpot = async (
-        underlying: string
-      ): Promise<number | null> => {
+      const getSpot = async (underlying: string): Promise<number | null> => {
         if (spotCache.has(underlying)) {
           return spotCache.get(underlying) ?? null;
         }
@@ -4069,57 +4052,33 @@ function createServer(
             : "NSE:NIFTY BANK";
 
         const data = (await zerodhaGet(
-          "/quote?" +
-            new URLSearchParams({ i: symbol }).toString(),
+          "/quote?" + new URLSearchParams({ i: symbol }).toString(),
           env
         )) as any;
 
-        const spot =
-          data?.data?.[symbol]?.last_price;
-
-        const value =
-          typeof spot === "number" ? spot : null;
-
+        const spot = data?.data?.[symbol]?.last_price;
+        const value = typeof spot === "number" ? spot : null;
         spotCache.set(underlying, value);
         return value;
       };
 
       for (const shortPosition of optionPositions) {
-        const shortQty =
-          Number(shortPosition.quantity);
-
+        const shortQty = Number(shortPosition.quantity);
         if (shortQty >= 0) continue;
 
-        const shortSymbol =
-          shortPosition.tradingsymbol;
+        const shortSymbol = shortPosition.tradingsymbol;
+        if (usedSymbols.has(shortSymbol)) continue;
 
-        if (usedSymbols.has(shortSymbol))
-          continue;
-
-        const shortInstrument =
-          instrumentBySymbol.get(shortSymbol);
-
+        const shortInstrument = instrumentBySymbol.get(shortSymbol);
         if (!shortInstrument) continue;
 
-        const underlying =
-          shortInstrument.name;
+        const underlying = shortInstrument.name;
+        if (underlying !== "NIFTY" && underlying !== "BANKNIFTY") continue;
 
-        if (
-          underlying !== "NIFTY" &&
-          underlying !== "BANKNIFTY"
-        ) continue;
-
-        const optionType =
-          shortInstrument.instrument_type;
-
-        const shortStrike =
-          Number(shortInstrument.strike);
-
-        const expiry =
-          shortInstrument.expiry;
-
-        const width =
-          widthByUnderlying[underlying];
+        const optionType = shortInstrument.instrument_type;
+        const shortStrike = Number(shortInstrument.strike);
+        const expiry = shortInstrument.expiry;
+        const width = widthByUnderlying[underlying];
 
         const strategy =
           optionType === "PE"
@@ -4135,23 +4094,19 @@ function createServer(
             ? shortStrike - width
             : shortStrike + width;
 
-        const longPosition =
-          optionPositions.find((p: any) => {
-            if (usedSymbols.has(p.tradingsymbol))
-              return false;
+        const longPosition = optionPositions.find((p: any) => {
+          if (usedSymbols.has(p.tradingsymbol)) return false;
+          const instrument = instrumentBySymbol.get(p.tradingsymbol);
 
-            const instrument =
-              instrumentBySymbol.get(p.tradingsymbol);
-
-            return Boolean(
-              instrument &&
-              instrument.name === underlying &&
-              instrument.expiry === expiry &&
-              instrument.instrument_type === optionType &&
-              Number(instrument.strike) === longStrike &&
-              Number(p.quantity) === Math.abs(shortQty)
-            );
-          });
+          return Boolean(
+            instrument &&
+            instrument.name === underlying &&
+            instrument.expiry === expiry &&
+            instrument.instrument_type === optionType &&
+            Number(instrument.strike) === longStrike &&
+            Number(p.quantity) === Math.abs(shortQty)
+          );
+        });
 
         if (!longPosition) {
           unmatched.push({
@@ -4164,52 +4119,21 @@ function createServer(
           continue;
         }
 
-        const longSymbol =
-          longPosition.tradingsymbol;
+        const longSymbol = longPosition.tradingsymbol;
+        const shortAvg = Number(shortPosition.average_price);
+        const longAvg = Number(longPosition.average_price);
+        const entryCredit = shortAvg - longAvg;
+        const quantity = Math.abs(shortQty);
+        const lotSize = Number(shortInstrument.lot_size);
+        const lots = lotSize > 0 ? quantity / lotSize : null;
 
-        const shortAvg =
-          Number(shortPosition.average_price);
+        const maxProfit = entryCredit > 0 ? entryCredit * quantity : null;
+        const maxLoss = entryCredit >= 0 ? (width - entryCredit) * quantity : null;
+        const target75 = maxProfit !== null ? maxProfit * 0.75 : null;
 
-        const longAvg =
-          Number(longPosition.average_price);
-
-        const entryCredit =
-          shortAvg - longAvg;
-
-        const quantity =
-          Math.abs(shortQty);
-
-        const lotSize =
-          Number(shortInstrument.lot_size);
-
-        const lots =
-          lotSize > 0
-            ? quantity / lotSize
-            : null;
-
-        const maxProfit =
-          entryCredit > 0
-            ? entryCredit * quantity
-            : null;
-
-        const maxLoss =
-          entryCredit >= 0
-            ? (width - entryCredit) * quantity
-            : null;
-
-        const target75 =
-          maxProfit !== null
-            ? maxProfit * 0.75
-            : null;
-
-        const shortPnl =
-          Number(shortPosition.pnl ?? 0);
-
-        const longPnl =
-          Number(longPosition.pnl ?? 0);
-
-        const currentMtm =
-          shortPnl + longPnl;
+        const shortPnl = Number(shortPosition.pnl ?? 0);
+        const longPnl = Number(longPosition.pnl ?? 0);
+        const currentMtm = shortPnl + longPnl;
 
         const currentPctOfMaxProfit =
           maxProfit !== null && maxProfit > 0
@@ -4226,8 +4150,7 @@ function createServer(
             ? shortStrike - entryCredit
             : shortStrike + entryCredit;
 
-        const spot =
-          await getSpot(underlying);
+        const spot = await getSpot(underlying);
 
         const shortStrikeDistance =
           spot !== null
@@ -4237,9 +4160,7 @@ function createServer(
             : null;
 
         const shortStrikeDistancePct =
-          spot !== null &&
-          spot > 0 &&
-          shortStrikeDistance !== null
+          spot !== null && spot > 0 && shortStrikeDistance !== null
             ? (shortStrikeDistance / spot) * 100
             : null;
 
@@ -4251,25 +4172,18 @@ function createServer(
             : null;
 
         const breakevenDistancePct =
-          spot !== null &&
-          spot > 0 &&
-          breakevenDistance !== null
+          spot !== null && spot > 0 && breakevenDistance !== null
             ? (breakevenDistance / spot) * 100
             : null;
 
-        const expiryDate =
-          new Date(
-            expiry + "T15:30:00+05:30"
-          );
-
-        const dte =
-          Math.max(
-            0,
-            Math.ceil(
-              (expiryDate.getTime() - Date.now()) /
-                (24 * 60 * 60 * 1000)
-            )
-          );
+        const expiryDate = new Date(expiry + "T15:30:00+05:30");
+        const dte = Math.max(
+          0,
+          Math.ceil(
+            (expiryDate.getTime() - Date.now()) /
+              (24 * 60 * 60 * 1000)
+          )
+        );
 
         trades.push({
           trade_key:
@@ -4283,7 +4197,6 @@ function createServer(
             shortStrike +
             "|" +
             longStrike,
-
           broker: "ZERODHA",
           underlying,
           expiry,
@@ -4301,18 +4214,15 @@ function createServer(
             symbol: shortSymbol,
             quantity: shortQty,
             average_price: round2(shortAvg),
-            last_price:
-              round2(Number(shortPosition.last_price)),
+            last_price: round2(Number(shortPosition.last_price)),
             pnl: round2(shortPnl),
           },
 
           long_leg: {
             symbol: longSymbol,
-            quantity:
-              Number(longPosition.quantity),
+            quantity: Number(longPosition.quantity),
             average_price: round2(longAvg),
-            last_price:
-              round2(Number(longPosition.last_price)),
+            last_price: round2(Number(longPosition.last_price)),
             pnl: round2(longPnl),
           },
 
@@ -4321,27 +4231,13 @@ function createServer(
           max_loss: round2(maxLoss),
           target_75: round2(target75),
           current_mtm: round2(currentMtm),
-
-          current_pct_of_max_profit:
-            round2(currentPctOfMaxProfit),
-
-          current_pct_of_max_loss:
-            round2(currentPctOfMaxLoss),
-
+          current_pct_of_max_profit: round2(currentPctOfMaxProfit),
+          current_pct_of_max_loss: round2(currentPctOfMaxLoss),
           breakeven: round2(breakeven),
-
-          breakeven_distance:
-            round2(breakevenDistance),
-
-          breakeven_distance_pct:
-            round2(breakevenDistancePct),
-
-          short_strike_distance:
-            round2(shortStrikeDistance),
-
-          short_strike_distance_pct:
-            round2(shortStrikeDistancePct),
-
+          breakeven_distance: round2(breakevenDistance),
+          breakeven_distance_pct: round2(breakevenDistancePct),
+          short_strike_distance: round2(shortStrikeDistance),
+          short_strike_distance_pct: round2(shortStrikeDistancePct),
           reconstruction_status: "MATCHED",
           read_only: true,
         });
@@ -4351,18 +4247,12 @@ function createServer(
       }
 
       for (const position of optionPositions) {
-        if (
-          !usedSymbols.has(
-            position.tradingsymbol
-          )
-        ) {
+        if (!usedSymbols.has(position.tradingsymbol)) {
           unmatched.push({
             broker: "ZERODHA",
             symbol: position.tradingsymbol,
             quantity: Number(position.quantity),
-            pnl: round2(
-              Number(position.pnl ?? 0)
-            ),
+            pnl: round2(Number(position.pnl ?? 0)),
             reason:
               "Position could not be paired into a frozen credit spread.",
           });
@@ -4389,11 +4279,9 @@ function createServer(
                     "Sell lower-strike CE + Buy higher-strike CE",
                 },
                 trade_count: trades.length,
-                unmatched_count:
-                  unmatched.length,
+                unmatched_count: unmatched.length,
                 trades,
-                unmatched_positions:
-                  unmatched,
+                unmatched_positions: unmatched,
                 read_only: true,
               },
               null,
@@ -4411,3 +4299,190 @@ function createServer(
 
   server.registerTool(
     "zerodha_positions",
+    {
+      description:
+        "Read current Zerodha day and net positions. Read-only.",
+    },
+
+    async () => ({
+      content: [
+        {
+          text: JSON.stringify(
+            await zerodhaGet(
+              "/portfolio/positions",
+              env
+            ),
+            null,
+            2
+          ),
+
+          type: "text",
+        },
+      ],
+    })
+  );
+
+  // ==========================================================
+  // HOLDINGS
+  // ==========================================================
+
+  server.registerTool(
+    "zerodha_holdings",
+    {
+      description:
+        "Read current Zerodha equity holdings. Read-only.",
+    },
+
+    async () => ({
+      content: [
+        {
+          text: JSON.stringify(
+            await zerodhaGet(
+              "/portfolio/holdings",
+              env
+            ),
+            null,
+            2
+          ),
+
+          type: "text",
+        },
+      ],
+    })
+  );
+
+  // ==========================================================
+  // ORDERS
+  // ==========================================================
+
+  server.registerTool(
+    "zerodha_orders",
+    {
+      description:
+        "Read all Zerodha orders for the current trading day. Read-only.",
+    },
+
+    async () => ({
+      content: [
+        {
+          text: JSON.stringify(
+            await zerodhaGet(
+              "/orders",
+              env
+            ),
+            null,
+            2
+          ),
+
+          type: "text",
+        },
+      ],
+    })
+  );
+
+  // ==========================================================
+  // TRADES
+  // ==========================================================
+
+  server.registerTool(
+    "zerodha_trades",
+    {
+      description:
+        "Read all Zerodha trades for the current trading day. Read-only.",
+    },
+
+    async () => ({
+      content: [
+        {
+          text: JSON.stringify(
+            await zerodhaGet(
+              "/trades",
+              env
+            ),
+            null,
+            2
+          ),
+
+          type: "text",
+        },
+      ],
+    })
+  );
+
+  // ==========================================================
+  // ORDER HISTORY
+  // ==========================================================
+
+  server.registerTool(
+    "zerodha_order_history",
+    {
+      description:
+        "Read the history of a specific Zerodha order. Read-only.",
+
+      inputSchema: {
+        order_id:
+          z.string(),
+      },
+    },
+
+    async ({
+      order_id,
+    }) => ({
+      content: [
+        {
+          text: JSON.stringify(
+            await zerodhaGet(
+              "/orders/" +
+                encodeURIComponent(
+                  order_id
+                ),
+              env
+            ),
+            null,
+            2
+          ),
+
+          type: "text",
+        },
+      ],
+    })
+  );
+
+  return server;
+}
+
+// ============================================================
+// WORKER ENTRY POINT
+// ============================================================
+
+export default {
+  async fetch(
+    request,
+    env,
+    ctx
+  ) {
+    const url =
+      new URL(request.url);
+
+    if (
+      url.pathname ===
+        "/login" ||
+      url.pathname ===
+        "/callback"
+    ) {
+      return handleZerodhaLogin(
+        request,
+        env
+      );
+    }
+
+    return createMcpHandler(
+      () =>
+        createServer(env)
+    )(
+      request,
+      env,
+      ctx
+    );
+  },
+} satisfies ExportedHandler<Env>;
