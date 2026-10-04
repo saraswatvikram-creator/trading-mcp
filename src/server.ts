@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/server";
+import { registerAngelOneTools } from "./angelone";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 
@@ -7,6 +8,11 @@ type Env = {
   ZERODHA_API_SECRET: string;
   ZERODHA_ACCESS_TOKEN?: string;
   ZERODHA_TOKEN_STORE?: KVNamespace;
+
+  ANGELONE_API_KEY?: string;
+  ANGELONE_CLIENT_ID?: string;
+  ANGELONE_PIN?: string;
+  ANGELONE_TOTP_SECRET?: string;
 };
 
 // ============================================================
@@ -434,6 +440,8 @@ function createServer(
       name: "Vikram Trading MCP",
       version: "1.0.0",
     });
+
+  registerAngelOneTools(server, env);
 
   // ==========================================================
   // HELLO
