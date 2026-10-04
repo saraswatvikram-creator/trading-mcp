@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { registerAngelOneTools } from "./angelone";
+import { registerFivePaisaTools, handleFivePaisaCallback } from "./fivepaisa";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 
@@ -13,6 +14,12 @@ type Env = {
   ANGELONE_CLIENT_ID?: string;
   ANGELONE_PIN?: string;
   ANGELONE_TOTP_SECRET?: string;
+
+  FIVEPAISA_API_KEY?: string;
+  FIVEPAISA_ENCRYPTION_KEY?: string;
+  FIVEPAISA_USER_ID?: string;
+  FIVEPAISA_REDIRECT_URL?: string;
+  FIVEPAISA_TOKEN_STORE?: KVNamespace;
 };
 
 // ============================================================
@@ -433,7 +440,8 @@ async function getNfoInstrumentMaster(
 // ============================================================
 
 function createServer(
-  env: Env
+  env: Env,
+  baseUrl: string
 ) {
   const server =
     new McpServer({
@@ -442,6 +450,7 @@ function createServer(
     });
 
   registerAngelOneTools(server, env);
+  registerFivePaisaTools(server, env, baseUrl);
 
   // ==========================================================
   // HELLO
@@ -4352,9 +4361,13 @@ export default {
       );
     }
 
+    if (url.pathname === "/fivepaisa/callback") {
+      return handleFivePaisaCallback(request, env);
+    }
+
     return createMcpHandler(
       () =>
-        createServer(env)
+        createServer(env, url.origin)
     )(
       request,
       env,
