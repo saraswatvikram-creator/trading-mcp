@@ -3995,6 +3995,173 @@ function createServer(
 
 
   // ==========================================================
+
+  // ==========================================================
+  // CS TRADE REGISTRY
+  // ==========================================================
+
+  server.registerTool(
+    "zerodha_trade_registry",
+    {
+      description:
+        "Persistent read/write registry for logical Zerodha credit-spread trades. Stores trade identity, actual trade date when known, first observation date, original economics, and lifecycle fields. Read/write.",
+      inputSchema: {
+        action: z.enum(["get", "upsert", "list"]).describe(
+          "get one trade by trade_id, upsert one trade record, or list registry records"
+        ),
+        trade_id: z.string().min(1).optional(),
+        trade: z
+          .object({
+            trade_id: z.string().min(1),
+            broker: z.string().min(1),
+            underlying: z.enum(["NIFTY", "BANKNIFTY"]),
+            expiry: z.string().min(1),
+            strategy: z.enum(["BPS", "BCS"]),
+            short_strike: z.number(),
+            long_strike: z.number(),
+            quantity: z.number().int().positive(),
+            trade_date: z.string().nullable(),
+            trade_time: z.string().nullable().optional(),
+            trade_date_source: z
+              .enum(["ZERODHA_TRANSACTION", "USER_CONFIRMED", "FIRST_OBSERVED", "UNKNOWN"])
+              .default("UNKNOWN"),
+            first_observed_date: z.string().nullable(),
+            entry_credit: z.number().nullable(),
+            max_profit: z.number().nullable(),
+            max_loss: z.number().nullable(),
+            closed_date: z.string().nullable().optional(),
+            booked_pnl: z.number().nullable().optional(),
+          })
+          .optional(),
+      },
+    },
+    async ({ action, trade_id, trade }) => {
+      const prefix = "cs_trade:";
+
+      if (!env.ZERODHA_TOKEN_STORE) {
+        throw new Error("KV token store is not configured.");
+      }
+
+      if (action === "get") {
+        if (!trade_id) {
+          throw new Error("trade_id is required for action=get");
+        }
+
+        const record = await env.ZERODHA_TOKEN_STORE.get(
+          prefix + trade_id,
+          "json"
+        );
+
+        return {
+          content: [
+            {
+              text: JSON.stringify(
+                {
+                  status: "success",
+                  action,
+                  trade_id,
+                  found: record !== null,
+                  trade: record,
+                  read_only: true,
+                },
+                null,
+                2
+              ),
+              type: "text",
+            },
+          ],
+        };
+      }
+
+      if (action === "list") {
+        const result = await env.ZERODHA_TOKEN_STORE.list({
+          prefix,
+          limit: 1000,
+        });
+
+        const records = [];
+        for (const key of result.keys) {
+          const value = await env.ZERODHA_TOKEN_STORE.get(key.name, "json");
+          if (value !== null) records.push(value);
+        }
+
+        return {
+          content: [
+            {
+              text: JSON.stringify(
+                {
+                  status: "success",
+                  action,
+                  count: records.length,
+                  trades: records,
+                  read_only: true,
+                },
+                null,
+                2
+              ),
+              type: "text",
+            },
+          ],
+        };
+      }
+
+      if (!trade) {
+        throw new Error("trade is required for action=upsert");
+      }
+
+      const existing = await env.ZERODHA_TOKEN_STORE.get(
+        prefix + trade.trade_id,
+        "json"
+      );
+
+      const existingRecord = existing as Record<string, unknown> | null;
+
+      // Never overwrite an established trade date with a later observation date.
+      const merged = {
+        ...(existingRecord ?? {}),
+        ...trade,
+        trade_date:
+          trade.trade_date ??
+          (existingRecord?.trade_date as string | null | undefined) ??
+          null,
+        first_observed_date:
+          (existingRecord?.first_observed_date as string | null | undefined) ??
+          trade.first_observed_date ??
+          null,
+        trade_date_source:
+          trade.trade_date !== null
+            ? trade.trade_date_source
+            : (existingRecord?.trade_date_source as string | undefined) ??
+              trade.trade_date_source,
+      };
+
+      await env.ZERODHA_TOKEN_STORE.put(
+        prefix + trade.trade_id,
+        JSON.stringify(merged)
+      );
+
+      return {
+        content: [
+          {
+            text: JSON.stringify(
+              {
+                status: "success",
+                action,
+                trade: merged,
+                preserved_existing_trade_date:
+                  existingRecord?.trade_date != null &&
+                  trade.trade_date === null,
+              },
+              null,
+              2
+            ),
+            type: "text",
+          },
+        ],
+      };
+    }
+  );
+
   // POSITIONS
   // ==========================================================
 
