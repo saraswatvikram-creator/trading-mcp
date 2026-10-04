@@ -4007,7 +4007,7 @@ function createServer(
         "Persistent read/write registry for logical Zerodha credit-spread trades. Stores trade identity, actual trade date when known, first observation date, original economics, and lifecycle fields. Read/write.",
       inputSchema: {
         action: z.enum(["get", "upsert", "list"]).describe(
-          "get one trade by trade_id, upsert one trade record, or list registry records"
+          "get one trade, upsert a trade record, or list all registry records"
         ),
         trade_id: z.string().min(1).optional(),
         trade: z
