@@ -275,12 +275,15 @@ function dashboardTable(
     ? margin.EquityMargin[0] ?? {}
     : {};
 
-  const positionCount = Array.isArray(positions) ? positions.length : 0;
+  const positionCount = Array.isArray(positions)
+    ? positions.filter((row) => Number(row?.NetQty ?? 0) !== 0).length
+    : 0;
   const orderCount = Array.isArray(orders) ? orders.length : 0;
   const tradeCount = Array.isArray(trades) ? trades.length : 0;
 
   const mtm = positions.reduce((sum, row) => {
     const value =
+      Number(row?.MTOM) ||
       Number(row?.MTM) ||
       Number(row?.MtoM) ||
       Number(row?.Mtm) ||
