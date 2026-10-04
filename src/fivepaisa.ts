@@ -14,6 +14,9 @@ const FIVEPAISA_ACCESS_TOKEN_URL =
 const FIVEPAISA_API_BASE =
   "https://Openapi.5paisa.com/VendorsAPI/Service1.svc";
 
+// Public 5Paisa Xstream API gateway identifier used by the official SDK.
+const FIVEPAISA_API_UID = "ka7SFqAU6SC";
+
 const STORE_PREFIX = "fivepaisa:";
 const ACCESS_TOKEN_KEY = STORE_PREFIX + "access_token";
 const CLIENT_CODE_KEY = STORE_PREFIX + "client_code";
@@ -214,6 +217,7 @@ async function fivePaisaPost(
       "Content-Type": "application/json",
       Accept: "application/json",
       Authorization: "Bearer " + session.accessToken,
+      "5Paisa-API-Uid": FIVEPAISA_API_UID,
     },
     body: JSON.stringify({
       head: {
