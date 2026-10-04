@@ -1,5 +1,3 @@
-import { z } from "zod";
-
 type AngelOneEnv = {
   ANGELONE_API_KEY?: string;
   ANGELONE_CLIENT_ID?: string;
