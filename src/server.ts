@@ -1,12 +1,18 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
+import { registerAngelOneTools } from "./angelone";
 
 type Env = {
   ZERODHA_API_KEY: string;
   ZERODHA_API_SECRET: string;
   ZERODHA_ACCESS_TOKEN?: string;
   ZERODHA_TOKEN_STORE?: KVNamespace;
+
+  ANGELONE_API_KEY?: string;
+  ANGELONE_CLIENT_ID?: string;
+  ANGELONE_PIN?: string;
+  ANGELONE_TOTP_SECRET?: string;
 };
 
 // ============================================================
@@ -435,6 +441,8 @@ function createServer(
       version: "1.0.0",
     });
 
+  registerAngelOneTools(server, env);
+
   // ==========================================================
   // HELLO
   // ==========================================================
@@ -697,7 +705,6 @@ function createServer(
               headers.join(",") +
               "\n" +
               rows.join("\n"),
-
             type: "text",
           },
         ],
@@ -1397,8 +1404,7 @@ function createServer(
             .int()
             .min(5)
             .max(50)
-            .optional(),
-      },
+            .optional(),      },
     },
 
     async ({
@@ -2097,8 +2103,7 @@ function createServer(
                 : null;
 
             const peSymbol =
-              entry?.PE
-                ? "NFO:" +
+              entry?.PE                ? "NFO:" +
                   entry.PE
                     .tradingsymbol
                 : null;
@@ -2797,8 +2802,7 @@ function createServer(
                     ),
                   max_profit_total:
                     round2(
-                      maxProfitTotal
-                    ),
+                      maxProfitTotal                    ),
                   max_loss_total:
                     round2(
                       maxLossTotal
@@ -3497,8 +3501,7 @@ function createServer(
             const twoLegBidAskWidth =
               shortBid !==
                 null &&
-              shortAsk !==
-                null &&
+              shortAsk !==                null &&
               longBid !==
                 null &&
               longAsk !==
@@ -4197,8 +4200,7 @@ function createServer(
   server.registerTool(
     "zerodha_holdings",
     {
-      description:
-        "Read current Zerodha equity holdings. Read-only.",
+      description:        "Read current Zerodha equity holdings. Read-only.",
     },
 
     async () => ({
