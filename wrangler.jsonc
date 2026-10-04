@@ -6,7 +6,7 @@
   "main": "src/server.ts",
   "assets": {
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/mcp", "/login", "/callback"]
+    "run_worker_first": ["/mcp", "/login", "/callback", "/fivepaisa/callback"]
   },
   "kv_namespaces": [
     {
