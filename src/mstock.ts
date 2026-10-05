@@ -272,9 +272,8 @@ function pnl(open: any[], all: any[]) {
 }
 
 async function liveOrOtp(env: MStockEnv, otp?: string) {
-  if (otp) await loginWithOtp(env, otp);
-
   try {
+    if (otp) await loginWithOtp(env, otp);
     return { live: true as const, data: await positions(env) };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
