@@ -455,7 +455,7 @@ function createServer(
   const server =
     new McpServer({
       name: "Vikram Trading MCP",
-      version: "1.0.0",
+      version: "1.1.0",
     });
 
   registerAngelOneTools(server, env);
