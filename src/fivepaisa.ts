@@ -265,7 +265,14 @@ async function fivePaisaPost(
     throw new Error("5Paisa session has expired. Start 5Paisa login again.");
   }
 
-  if (status !== undefined && status !== 0 && status !== "0") {
+  // 5Paisa returns status=1 with "No Order found for this Client." when
+  // the order book is legitimately empty. Treat that as an empty dataset.
+  if (
+    status !== undefined &&
+    status !== 0 &&
+    status !== "0" &&
+    !(status === 1 && /no order found/i.test(String(message ?? "")))
+  ) {
     throw new Error(
       "5Paisa API returned an error: " +
         JSON.stringify({
@@ -273,6 +280,12 @@ async function fivePaisaPost(
           message,
         })
     );
+  }
+
+  if (status === 1 && /no order found/i.test(String(message ?? ""))) {
+    if (data?.body && !data.body.OrderBookDetail) {
+      data.body.OrderBookDetail = [];
+    }
   }
 
   return data;
