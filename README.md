@@ -83,3 +83,19 @@ One-time authentication sequence:
 6. When the token expires, repeat steps 2-3. TOTP remains disabled.
 
 The intended ChatGPT command is: **"show mstock positions"**.
+
+### m.Stock live-position UX
+
+The preferred command is **"show mstock positions"**.
+
+- The tool reads the live Type A net-position endpoint.
+- If the daily session token is missing/expired, the tool automatically requests the normal OTP.
+- The same `mstock_positions` tool accepts an optional 6-digit `otp`; after authentication it immediately returns live positions and P&L.
+- A 90-second OTP request cooldown prevents repeated OTP spam.
+- The access token and login time are persisted in the existing `ZERODHA_TOKEN_STORE` KV namespace.
+- TOTP is disabled and the TOTP endpoint is never called.
+- No order placement, modification, cancellation, conversion or square-off capability is exposed.
+- m.Stock Type A access tokens are daily sessions; a fresh normal OTP is therefore required after the broker session expires. This is an m.Stock authentication constraint, not a Worker error.
+
+The Type A API contract used here is the documented flow: login with username/password, exchange the OTP at `/openapi/typea/session/token` with `api_key`, `request_token` and `checksum=L`, then read `/openapi/typea/portfolio/positions` using `Authorization: token api_key:access_token`.
+
