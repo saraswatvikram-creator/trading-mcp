@@ -404,7 +404,7 @@ export function registerFivePaisaTools(
         await Promise.all([
           fivePaisaPost(env, "/V4/Margin", {}),
           fivePaisaPost(env, "/V2/NetPositionNetWise", {}),
-          fivePaisaPost(env, "/V4/OrderBook", {}),
+          fivePaisaPost(env, "/V3/OrderBook", {}),
           fivePaisaPost(env, "/V1/TradeBook", {}),
         ]);
 
