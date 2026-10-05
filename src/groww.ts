@@ -8,16 +8,50 @@ const GROWW_BASE_URL = "https://api.groww.in";
 const GROWW_ACCESS_TOKEN_KEY = "groww_access_token";
 const GROWW_ACCESS_EXPIRY_KEY = "groww_access_expiry";
 
+function normalizeGrowwTotpSecret(value: string): string {
+  let normalized = value.trim();
+
+  // Accept a QR/otpauth URI if the value was copied directly from an
+  // authenticator setup. Otherwise use the raw Base32 secret.
+  if (/^otpauth:\/\//i.test(normalized)) {
+    try {
+      const uri = new URL(normalized);
+      const secret = uri.searchParams.get("secret");
+      if (secret) normalized = secret;
+    } catch {
+      throw new Error("GROWW_TOTP_SECRET contains an invalid otpauth URI");
+    }
+  }
+
+  // Groww/authenticator displays may wrap the Base32 secret with spaces
+  // or hyphens. Those are presentation separators, not secret characters.
+  normalized = normalized
+    .replace(/[\s-]+/g, "")
+    .toUpperCase()
+    .replace(/=+$/g, "");
+
+  if (!normalized) {
+    throw new Error("GROWW_TOTP_SECRET is empty");
+  }
+
+  if (!/^[A-Z2-7]+$/.test(normalized)) {
+    throw new Error(
+      "GROWW_TOTP_SECRET must be the raw Base32 secret (or an otpauth URI). Do not enter the 6-digit TOTP code."
+    );
+  }
+
+  return normalized;
+}
+
 function base32Decode(value: string): Uint8Array {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  const normalized = value.toUpperCase().replace(/=+$/g, "").replace(/\s+/g, "");
+  const normalized = normalizeGrowwTotpSecret(value);
   let buffer = 0;
   let bits = 0;
   const output: number[] = [];
 
   for (const char of normalized) {
     const index = alphabet.indexOf(char);
-    if (index < 0) throw new Error("GROWW_TOTP_SECRET is not valid Base32");
     buffer = (buffer << 5) | index;
     bits += 5;
     if (bits >= 8) {
@@ -25,6 +59,11 @@ function base32Decode(value: string): Uint8Array {
       output.push((buffer >> bits) & 0xff);
     }
   }
+
+  if (output.length < 10) {
+    throw new Error("GROWW_TOTP_SECRET is too short to be a valid TOTP secret");
+  }
+
   return new Uint8Array(output);
 }
 
