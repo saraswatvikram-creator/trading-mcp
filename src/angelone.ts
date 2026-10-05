@@ -1,5 +1,3 @@
-import { registerGrowwTools } from "./groww";
-
 type AngelOneEnv = {
   ANGELONE_API_KEY?: string;
   ANGELONE_CLIENT_ID?: string;
@@ -124,7 +122,6 @@ async function angelOneGet(url: string, env: AngelOneEnv, jwtToken: string): Pro
 }
 
 export function registerAngelOneTools(server: any, env: AngelOneEnv): void {
-  registerGrowwTools(server, env as any);
 
   server.registerTool(
     "angelone_auth_status",
