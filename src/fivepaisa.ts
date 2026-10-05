@@ -74,8 +74,14 @@ async function getStoredFivePaisaSession(
   tokenExpiry: string | null;
 }> {
   const store = getStore(env);
-  const accessToken = await store.get(ACCESS_TOKEN_KEY);
-  const clientCode = await store.get(CLIENT_CODE_KEY);
+  let accessToken = await store.get(ACCESS_TOKEN_KEY);
+  let clientCode = await store.get(CLIENT_CODE_KEY);
+  if (!accessToken || !clientCode) {
+    // KV can briefly lag immediately after the OAuth callback writes the session.
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    accessToken = await store.get(ACCESS_TOKEN_KEY);
+    clientCode = await store.get(CLIENT_CODE_KEY);
+  }
   const loginTime = await store.get(LOGIN_TIME_KEY);
   const tokenExpiry = await store.get(TOKEN_EXPIRY_KEY);
 
@@ -180,15 +186,18 @@ async function exchangeFivePaisaRequestToken(
     );
   }
 
-  const tokenExpiry = getJwtExpiry(accessToken);
+  const jwtExpiry = getJwtExpiry(accessToken);
+  const now = new Date();
+  const tokenExpiry = jwtExpiry ?? new Date(now.getTime() + 12 * 60 * 60 * 1000).toISOString();
   const store = getStore(env);
-  const now = new Date().toISOString();
 
+  // Keep the session in KV with an explicit TTL even when 5Paisa returns
+  // a token that is not a JWT (and therefore has no readable exp claim).
   await Promise.all([
-    store.put(ACCESS_TOKEN_KEY, accessToken),
-    store.put(CLIENT_CODE_KEY, String(clientCode)),
-    store.put(LOGIN_TIME_KEY, now),
-    ...(tokenExpiry ? [store.put(TOKEN_EXPIRY_KEY, tokenExpiry)] : []),
+    store.put(ACCESS_TOKEN_KEY, accessToken, { expirationTtl: 12 * 60 * 60 }),
+    store.put(CLIENT_CODE_KEY, String(clientCode), { expirationTtl: 12 * 60 * 60 }),
+    store.put(LOGIN_TIME_KEY, now.toISOString(), { expirationTtl: 12 * 60 * 60 }),
+    store.put(TOKEN_EXPIRY_KEY, tokenExpiry, { expirationTtl: 12 * 60 * 60 }),
   ]);
 
   return {
