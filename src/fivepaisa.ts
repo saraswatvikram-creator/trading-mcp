@@ -422,13 +422,20 @@ export function registerFivePaisaTools(
         };
       }
 
-      const [marginResponse, positionResponse, orderResponse, tradeResponse] =
+      const [marginResponse, positionResponse, orderResponse] =
         await Promise.all([
           fivePaisaPost(env, "/V4/Margin", {}),
           fivePaisaPost(env, "/V2/NetPositionNetWise", {}),
           fivePaisaPost(env, "/V3/OrderBook", {}),
-          fivePaisaPost(env, "/V1/TradeBook", {}),
         ]);
+
+      let tradeResponse: any = { body: { TradeBookDetail: [] } };
+      try {
+        tradeResponse = await fivePaisaPost(env, "/V1/TradeBook", {});
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!/No Trades found for this Client/i.test(message)) throw error;
+      }
 
       const positions = positionResponse?.body?.NetPositionDetail ?? [];
       const orders = orderResponse?.body?.OrderBookDetail ?? [];
