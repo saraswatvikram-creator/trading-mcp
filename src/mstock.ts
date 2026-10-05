@@ -8,67 +8,50 @@ type MStockEnv = {
   ZERODHA_TOKEN_STORE?: KVNamespace;
 };
 
-const MSTOCK_BASE_URL = "https://api.mstock.trade";
-const MSTOCK_VERSION = "1";
+const BASE = "https://api.mstock.trade";
+const VERSION = "1";
+const OTP_COOLDOWN_SECONDS = 90;
 
-function requireMStockConfig(env: MStockEnv): {
-  apiKey: string;
-  username: string;
-  password: string;
-} {
+function config(env: MStockEnv) {
   const apiKey = env.MSTOCK_API_KEY?.trim();
   const username = env.MSTOCK_USERNAME?.trim();
   const password = env.MSTOCK_PASSWORD ?? "";
+  const store = env.ZERODHA_TOKEN_STORE;
 
   if (!apiKey || !username || !password) {
-    throw new Error(
-      "m.Stock configuration is incomplete. Required Cloudflare secrets: " +
-      "MSTOCK_API_KEY, MSTOCK_USERNAME, MSTOCK_PASSWORD. " +
-      "This integration uses m.Stock Type A with normal OTP authentication; TOTP is not used."
-    );
+    throw new Error("MSTOCK_CONFIG_REQUIRED: Missing MSTOCK_API_KEY, MSTOCK_USERNAME or MSTOCK_PASSWORD.");
   }
-
-  return { apiKey, username, password };
-}
-
-function tokenStore(env: MStockEnv): KVNamespace | null {
-  return env.ZERODHA_TOKEN_STORE ?? null;
-}
-
-async function getStoredAccessToken(env: MStockEnv): Promise<string | null> {
-  const stored = await tokenStore(env)?.get("mstock_access_token");
-  if (stored?.trim()) return stored.trim();
-
-  return env.MSTOCK_ACCESS_TOKEN?.trim() || null;
-}
-
-async function getStoredLoginTime(env: MStockEnv): Promise<string | null> {
-  return (await tokenStore(env)?.get("mstock_login_time")) ?? null;
-}
-
-async function storeMStockSession(
-  env: MStockEnv,
-  accessToken: string,
-  loginTime: string
-): Promise<void> {
-  const store = tokenStore(env);
-
-  if (store) {
-    await store.put("mstock_access_token", accessToken);
-    await store.put("mstock_login_time", loginTime);
+  if (!store) {
+    throw new Error("MSTOCK_STORAGE_REQUIRED: ZERODHA_TOKEN_STORE KV binding is required for the daily m.Stock session.");
   }
+  return { apiKey, username, password, store };
 }
 
-function decodeJwtExpiry(token: string): string | null {
+async function storedToken(env: MStockEnv) {
+  const value = await env.ZERODHA_TOKEN_STORE?.get("mstock_access_token");
+  return value?.trim() || env.MSTOCK_ACCESS_TOKEN?.trim() || null;
+}
+
+async function storedLoginTime(env: MStockEnv) {
+  return (await env.ZERODHA_TOKEN_STORE?.get("mstock_login_time")) ?? null;
+}
+
+async function clearSession(env: MStockEnv) {
+  if (!env.ZERODHA_TOKEN_STORE) return;
+  await Promise.all([
+    env.ZERODHA_TOKEN_STORE.delete("mstock_access_token"),
+    env.ZERODHA_TOKEN_STORE.delete("mstock_login_time"),
+  ]);
+}
+
+function jwtExpiry(token: string | null) {
   try {
-    const parts = token.split(".");
-    if (parts.length < 2) return null;
-
-    const normalized = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-    const padded =
-      normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+    if (!token) return null;
+    const part = token.split(".")[1];
+    if (!part) return null;
+    const normalized = part.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
     const payload = JSON.parse(atob(padded));
-
     return typeof payload.exp === "number"
       ? new Date(payload.exp * 1000).toISOString()
       : null;
@@ -77,49 +60,37 @@ function decodeJwtExpiry(token: string): string | null {
   }
 }
 
-function inferredMidnightExpiry(loginTime: string | null): string | null {
+function midnightExpiry(loginTime: string | null) {
   if (!loginTime) return null;
-
-  // m.Stock login_time is documented as an IST clock value such as
-  // "2024-09-26 03:34:48". Parse it explicitly as Asia/Kolkata.
-  const match = loginTime.match(
-    /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/
-  );
-
-  if (!match) return null;
-
-  const [, year, month, day, hour, minute, second] = match;
-  const parsed = new Date(
-    `${year}-${month}-${day}T${hour}:${minute}:${second}+05:30`
-  );
-
+  const m = loginTime.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, s] = m;
+  const parsed = new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}+05:30`);
   if (Number.isNaN(parsed.getTime())) return null;
-
-  // Type A access tokens are documented as valid until midnight
-  // of the generated day. The next midnight in IST is 18:30 UTC.
   const expiry = new Date(parsed);
   expiry.setUTCHours(18, 30, 0, 0);
-
-  if (expiry.getTime() <= parsed.getTime()) {
-    expiry.setUTCDate(expiry.getUTCDate() + 1);
-  }
-
+  if (expiry <= parsed) expiry.setUTCDate(expiry.getUTCDate() + 1);
   return expiry.toISOString();
 }
 
-function tokenExpiry(token: string | null, loginTime: string | null): string | null {
-  if (!token) return null;
-  return decodeJwtExpiry(token) ?? inferredMidnightExpiry(loginTime);
+function expiry(token: string | null, loginTime: string | null) {
+  return jwtExpiry(token) ?? midnightExpiry(loginTime);
 }
 
-async function mStockPostForm(
-  path: string,
-  body: Record<string, string>
-): Promise<any> {
-  const response = await fetch(MSTOCK_BASE_URL + path, {
+function expired(token: string | null, loginTime: string | null) {
+  const e = expiry(token, loginTime);
+  return e !== null && new Date(e).getTime() <= Date.now();
+}
+
+function cleanError(prefix: string, message: string) {
+  return message.startsWith(prefix) ? message.slice(prefix.length).trim() : message;
+}
+
+async function postForm(path: string, body: Record<string, string>) {
+  const response = await fetch(BASE + path, {
     method: "POST",
     headers: {
-      "X-Mirae-Version": MSTOCK_VERSION,
+      "X-Mirae-Version": VERSION,
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: new URLSearchParams(body).toString(),
@@ -127,91 +98,79 @@ async function mStockPostForm(
 
   const text = await response.text();
   let data: any;
-
   try {
     data = JSON.parse(text);
   } catch {
-    throw new Error(
-      "m.Stock API returned non-JSON response (" +
-        response.status +
-        "): " +
-        text.slice(0, 500)
-    );
+    throw new Error(`MSTOCK_API_ERROR: Non-JSON response (HTTP ${response.status}).`);
   }
 
-  if (!response.ok || String(data?.status ?? "").toLowerCase() === "error") {
-    throw new Error(
-      "m.Stock API error " +
-        response.status +
-        ": " +
-        JSON.stringify(data)
-    );
-  }
+  const status = String(data?.status ?? "").toLowerCase();
+  const message = String(data?.message ?? "Unknown m.Stock API error");
 
+  if (!response.ok || status === "error") {
+    if (response.status === 401 || response.status === 403 || /token|session|authentication/i.test(message)) {
+      throw new Error("MSTOCK_AUTH_EXPIRED: " + message);
+    }
+    if (/otp|incorrect|expired/i.test(message)) {
+      throw new Error("MSTOCK_OTP_INVALID: " + message);
+    }
+    throw new Error(`MSTOCK_API_ERROR: HTTP ${response.status}. ${message}`);
+  }
   return data;
 }
 
-async function mStockGet(
-  path: string,
-  apiKey: string,
-  accessToken: string
-): Promise<any> {
-  const response = await fetch(MSTOCK_BASE_URL + path, {
-    method: "GET",
+async function get(path: string, apiKey: string, accessToken: string) {
+  const response = await fetch(BASE + path, {
     headers: {
-      "X-Mirae-Version": MSTOCK_VERSION,
-      Authorization: "token " + apiKey + ":" + accessToken,
+      "X-Mirae-Version": VERSION,
+      Authorization: `token ${apiKey}:${accessToken}`,
     },
   });
 
   const text = await response.text();
   let data: any;
-
   try {
     data = JSON.parse(text);
   } catch {
-    throw new Error(
-      "m.Stock API returned non-JSON response (" +
-        response.status +
-        "): " +
-        text.slice(0, 500)
-    );
+    throw new Error(`MSTOCK_API_ERROR: Non-JSON response (HTTP ${response.status}).`);
   }
 
-  if (!response.ok || String(data?.status ?? "").toLowerCase() === "error") {
-    const message = String(data?.message ?? "Unknown m.Stock API error");
-
-    if (response.status === 401 || /token|session|authentication/i.test(message)) {
+  const status = String(data?.status ?? "").toLowerCase();
+  const message = String(data?.message ?? "Unknown m.Stock API error");
+  if (!response.ok || status === "error") {
+    if (response.status === 401 || response.status === 403 || /token|session|authentication/i.test(message)) {
       throw new Error("MSTOCK_AUTH_EXPIRED: " + message);
     }
-
-    throw new Error(
-      "m.Stock API error " +
-        response.status +
-        ": " +
-        JSON.stringify(data)
-    );
+    throw new Error(`MSTOCK_API_ERROR: HTTP ${response.status}. ${message}`);
   }
-
   return data;
 }
 
-async function sendMStockOtp(env: MStockEnv): Promise<any> {
-  const { username, password } = requireMStockConfig(env);
+async function requestOtp(env: MStockEnv) {
+  const { username, password, store } = config(env);
+  const prior = await store.get("mstock_otp_requested_at");
 
-  const data = await mStockPostForm(
-    "/openapi/typea/connect/login",
-    {
-      username,
-      password,
+  if (prior) {
+    const age = Math.floor((Date.now() - Number(prior)) / 1000);
+    if (Number.isFinite(age) && age >= 0 && age < OTP_COOLDOWN_SECONDS) {
+      return {
+        status: "OTP_ALREADY_SENT",
+        auth_mode: "TYPE_A_NORMAL_OTP",
+        retry_after_seconds: OTP_COOLDOWN_SECONDS - age,
+        message: "A normal m.Stock OTP was already requested recently. Use that OTP.",
+        read_only: true,
+      };
     }
-  );
+  }
+
+  const data = await postForm("/openapi/typea/connect/login", { username, password });
+  await store.put("mstock_otp_requested_at", String(Date.now()), { expirationTtl: OTP_COOLDOWN_SECONDS });
 
   return {
     status: "OTP_SENT",
     auth_mode: "TYPE_A_NORMAL_OTP",
-    message:
-      "m.Stock accepted the credentials and sent a normal OTP to the registered mobile number. TOTP is not used.",
+    totp: false,
+    message: "m.Stock accepted the credentials and sent a normal OTP. TOTP is not used.",
     broker_response: {
       status: data?.status ?? null,
       client_id: data?.data?.cid ?? null,
@@ -221,74 +180,50 @@ async function sendMStockOtp(env: MStockEnv): Promise<any> {
   };
 }
 
-async function completeMStockOtpLogin(
-  env: MStockEnv,
-  otp: string
-): Promise<any> {
-  const { apiKey } = requireMStockConfig(env);
+async function loginWithOtp(env: MStockEnv, otp: string) {
+  const { apiKey, store } = config(env);
+  const clean = otp.trim();
+  if (!/^\d{6}$/.test(clean)) throw new Error("MSTOCK_OTP_INVALID: OTP must be exactly 6 digits.");
 
-  const cleanOtp = otp.trim();
-
-  if (!/^\d{6}$/.test(cleanOtp)) {
-    throw new Error("m.Stock OTP must be exactly 6 digits.");
-  }
-
-  const data = await mStockPostForm(
-    "/openapi/typea/session/token",
-    {
-      api_key: apiKey,
-      request_token: cleanOtp,
-      checksum: "L",
-    }
-  );
+  const data = await postForm("/openapi/typea/session/token", {
+    api_key: apiKey,
+    request_token: clean,
+    checksum: "L",
+  });
 
   const accessToken = String(data?.data?.access_token ?? "").trim();
+  if (!accessToken) throw new Error("MSTOCK_AUTH_ERROR: No access_token was returned by m.Stock.");
 
-  if (!accessToken) {
-    throw new Error(
-      "m.Stock OTP was accepted but no access_token was returned."
-    );
-  }
-
-  const loginTime =
-    String(data?.data?.login_time ?? new Date().toISOString());
-
-  await storeMStockSession(env, accessToken, loginTime);
+  const loginTime = String(data?.data?.login_time ?? new Date().toISOString());
+  await store.put("mstock_access_token", accessToken);
+  await store.put("mstock_login_time", loginTime);
+  await store.delete("mstock_otp_requested_at");
 
   return {
     status: "CONNECTED",
+    broker: "m.Stock",
     auth_mode: "TYPE_A_NORMAL_OTP",
+    totp: false,
     login_time: loginTime,
-    token_expiry: tokenExpiry(accessToken, loginTime),
+    token_expiry: expiry(accessToken, loginTime),
     client_id: data?.data?.user_id ?? null,
     user_name: data?.data?.user_name ?? null,
+    session_persisted: true,
     read_only: true,
   };
 }
 
-function normalizePosition(row: any): any {
+function normalize(row: any) {
   const quantity = Number(row?.quantity ?? 0);
-  const averagePrice = Number(row?.average_price ?? 0);
-  const lastPrice = Number(row?.last_price ?? 0);
+  const average = Number(row?.average_price);
+  const last = Number(row?.last_price);
   const brokerUnrealised = Number(row?.unrealised);
   const brokerRealised = Number(row?.realised);
 
-  let calculatedUnrealised: number | null = null;
-
-  if (
-    Number.isFinite(quantity) &&
-    Number.isFinite(averagePrice) &&
-    Number.isFinite(lastPrice)
-  ) {
-    calculatedUnrealised =
-      quantity >= 0
-        ? (lastPrice - averagePrice) * quantity
-        : (averagePrice - lastPrice) * Math.abs(quantity);
+  let calculated: number | null = null;
+  if (Number.isFinite(quantity) && Number.isFinite(average) && Number.isFinite(last)) {
+    calculated = quantity >= 0 ? (last - average) * quantity : (average - last) * Math.abs(quantity);
   }
-
-  const unrealised = Number.isFinite(brokerUnrealised)
-    ? brokerUnrealised
-    : calculatedUnrealised;
 
   return {
     trading_symbol: row?.tradingsymbol ?? null,
@@ -300,9 +235,9 @@ function normalizePosition(row: any): any {
     strike: row?.strike ?? null,
     option_type: row?.option_type ?? null,
     quantity,
-    average_price: Number.isFinite(averagePrice) ? averagePrice : null,
-    last_price: Number.isFinite(lastPrice) ? lastPrice : null,
-    unrealised_pnl: unrealised,
+    average_price: Number.isFinite(average) ? average : null,
+    last_price: Number.isFinite(last) ? last : null,
+    unrealised_pnl: Number.isFinite(brokerUnrealised) ? brokerUnrealised : calculated,
     realised_pnl: Number.isFinite(brokerRealised) ? brokerRealised : null,
     m2m: Number.isFinite(Number(row?.m2m)) ? Number(row.m2m) : null,
     day_buy_quantity: Number(row?.day_buy_quantity ?? 0),
@@ -311,281 +246,139 @@ function normalizePosition(row: any): any {
   };
 }
 
-async function getMStockPositions(env: MStockEnv): Promise<{
-  accessToken: string;
-  tokenExpiry: string | null;
-  allPositions: any[];
-  openPositions: any[];
-  raw: any;
-}> {
-  const { apiKey } = requireMStockConfig(env);
-  const accessToken = await getStoredAccessToken(env);
+async function positions(env: MStockEnv) {
+  const { apiKey } = config(env);
+  const token = await storedToken(env);
+  const loginTime = await storedLoginTime(env);
 
-  if (!accessToken) {
-    throw new Error(
-      "MSTOCK_AUTH_REQUIRED: No m.Stock access token is stored. " +
-      "Run mstock_login without an OTP to send the normal OTP, then run mstock_login with the 6-digit OTP."
-    );
+  if (!token) throw new Error("MSTOCK_AUTH_REQUIRED: No daily m.Stock access token is stored.");
+  if (expired(token, loginTime)) {
+    await clearSession(env);
+    throw new Error("MSTOCK_AUTH_EXPIRED: The stored m.Stock access token has expired.");
   }
 
-  const loginTime = await getStoredLoginTime(env);
-  const response = await mStockGet(
-    "/openapi/typea/portfolio/positions",
-    apiKey,
-    accessToken
-  );
+  const response = await get("/openapi/typea/portfolio/positions", apiKey, token);
+  const net = Array.isArray(response?.data?.net) ? response.data.net : [];
+  const all = net.map(normalize);
+  const open = all.filter((p: any) => Number(p.quantity) !== 0);
 
-  const net = Array.isArray(response?.data?.net)
-    ? response.data.net
-    : [];
-
-  const allPositions = net.map(normalizePosition);
-  const openPositions = allPositions.filter(
-    (row: any) => Number(row.quantity) !== 0
-  );
-
-  return {
-    accessToken,
-    tokenExpiry: tokenExpiry(accessToken, loginTime),
-    allPositions,
-    openPositions,
-    raw: response,
-  };
+  return { all, open, tokenExpiry: expiry(token, loginTime) };
 }
 
-function dashboardText(
-  openPositions: any[],
-  totalUnrealised: number,
-  totalRealised: number,
-  tokenExpiry: string | null
-): string {
-  const lines = [
-    "## m.Stock Live Positions",
-    "",
-    "| Metric | Value |",
-    "|---|---:|",
-    "| Connection | LIVE |",
-    "| Auth | Type A / normal OTP |",
-    "| Open positions | " + openPositions.length + " |",
-    "| Live unrealised P&L | ₹" + totalUnrealised.toFixed(2) + " |",
-    "| Realised P&L returned by broker | ₹" + totalRealised.toFixed(2) + " |",
-    "| Access-token expiry | " + (tokenExpiry ?? "unknown") + " |",
-    "",
-    "| Symbol | Qty | Avg | LTP | Unrealised |",
-    "|---|---:|---:|---:|---:|",
-  ];
+function pnl(open: any[], all: any[]) {
+  const unrealised = open.reduce((s, p) => s + (Number.isFinite(Number(p.unrealised_pnl)) ? Number(p.unrealised_pnl) : 0), 0);
+  const realised = all.reduce((s, p) => s + (Number.isFinite(Number(p.realised_pnl)) ? Number(p.realised_pnl) : 0), 0);
+  return { unrealised: Number(unrealised.toFixed(2)), realised: Number(realised.toFixed(2)) };
+}
 
-  if (openPositions.length === 0) {
-    lines.push("| — | 0 | — | — | ₹0.00 |");
-  } else {
-    for (const row of openPositions) {
-      lines.push(
-        "| " +
-          String(row.trading_symbol ?? "—") +
-          " | " +
-          String(row.quantity) +
-          " | " +
-          (row.average_price == null ? "—" : "₹" + Number(row.average_price).toFixed(2)) +
-          " | " +
-          (row.last_price == null ? "—" : "₹" + Number(row.last_price).toFixed(2)) +
-          " | " +
-          (row.unrealised_pnl == null ? "—" : "₹" + Number(row.unrealised_pnl).toFixed(2)) +
-          " |"
-      );
+async function liveOrOtp(env: MStockEnv, otp?: string) {
+  if (otp) await loginWithOtp(env, otp);
+
+  try {
+    return { live: true as const, data: await positions(env) };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.startsWith("MSTOCK_AUTH_REQUIRED:") || message.startsWith("MSTOCK_AUTH_EXPIRED:")) {
+      return {
+        live: false as const,
+        auth: {
+          status: "OTP_REQUIRED",
+          broker: "m.Stock",
+          auth_mode: "TYPE_A_NORMAL_OTP",
+          totp: false,
+          reason: message.replace(/^MSTOCK_AUTH_(REQUIRED|EXPIRED):\s*/, ""),
+          otp: await requestOtp(env),
+          next_step: "Provide the 6-digit OTP in the same mstock_positions request; the tool will authenticate and return live positions.",
+          read_only: true,
+        },
+      };
     }
+    throw error;
   }
+}
 
-  return lines.join("\n");
+function result(payload: any) {
+  return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
 }
 
 export function registerMStockTools(server: any, env: MStockEnv): void {
   server.registerTool(
     "mstock_auth_status",
     {
-      description:
-        "Check m.Stock Type A configuration and stored session state. Read-only. TOTP is not used.",
+      description: "Check m.Stock Type A configuration and stored session state. Read-only. TOTP is not used.",
     },
     async () => {
-      const configured = Boolean(
-        env.MSTOCK_API_KEY?.trim() &&
-        env.MSTOCK_USERNAME?.trim() &&
-        env.MSTOCK_PASSWORD
-      );
-
-      const accessToken = await getStoredAccessToken(env);
-      const loginTime = await getStoredLoginTime(env);
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                status: configured ? "CONFIGURED" : "CONFIG_REQUIRED",
-                auth_mode: "TYPE_A_NORMAL_OTP",
-                totp: false,
-                credentials_configured: configured,
-                access_token_stored: Boolean(accessToken),
-                token_expiry: tokenExpiry(accessToken, loginTime),
-                read_only: true,
-                note:
-                  "m.Stock Type A uses the normal OTP session endpoint. " +
-                  "The TOTP endpoint is intentionally not used.",
-              },
-              null,
-              2
-            ),
-            type: "text",
-          },
-        ],
-      };
+      const configured = Boolean(env.MSTOCK_API_KEY?.trim() && env.MSTOCK_USERNAME?.trim() && env.MSTOCK_PASSWORD);
+      const token = await storedToken(env);
+      const loginTime = await storedLoginTime(env);
+      return result({
+        status: configured && Boolean(env.ZERODHA_TOKEN_STORE) ? "CONFIGURED" : "CONFIG_REQUIRED",
+        broker: "m.Stock",
+        auth_mode: "TYPE_A_NORMAL_OTP",
+        totp: false,
+        credentials_configured: configured,
+        kv_storage_configured: Boolean(env.ZERODHA_TOKEN_STORE),
+        access_token_stored: Boolean(token),
+        token_expired: token ? expired(token, loginTime) : null,
+        token_expiry: expiry(token, loginTime),
+        read_only: true,
+      });
     }
   );
 
   server.registerTool(
     "mstock_login",
     {
-      description:
-        "Authenticate m.Stock Type A without TOTP. Call with no OTP to send the normal SMS/email OTP; call again with the 6-digit OTP to create and persist the access token. Read-only.",
-      inputSchema: {
-        otp: z.string().regex(/^\d{6}$/).optional(),
-      },
+      description: "Authenticate m.Stock Type A without TOTP. No otp sends the normal OTP; a 6-digit otp creates and persists the daily access token. Read-only.",
+      inputSchema: { otp: z.string().regex(/^\d{6}$/).optional() },
     },
     async ({ otp }) => {
-      if (!otp) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(await sendMStockOtp(env), null, 2),
-              type: "text",
-            },
-          ],
-        };
+      try {
+        return result(otp ? await loginWithOtp(env, otp) : await requestOtp(env));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return result({
+          status: message.startsWith("MSTOCK_OTP_INVALID:") ? "OTP_INVALID" : "ERROR",
+          broker: "m.Stock",
+          message: message.replace(/^MSTOCK_[A-Z_]+:\s*/, ""),
+          read_only: true,
+        });
       }
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              await completeMStockOtpLogin(env, otp),
-              null,
-              2
-            ),
-            type: "text",
-          },
-        ],
-      };
     }
   );
 
   server.registerTool(
     "mstock_positions",
     {
-      description:
-        "Return current live m.Stock Type A F&O/net positions using the stored access token. If the token is missing or expired, return a clear authentication-required state. Read-only; never places or modifies orders.",
+      description: "Return live m.Stock Type A F&O/net positions. If the daily token is missing or expired, automatically request the normal OTP. If otp is supplied, authenticate and immediately return live positions. Read-only; never places or modifies orders.",
+      inputSchema: { otp: z.string().regex(/^\d{6}$/).optional() },
     },
-    async () => {
+    async ({ otp }) => {
       try {
-        const result = await getMStockPositions(env);
-
-        const totalUnrealised = result.openPositions.reduce(
-          (sum: number, row: any) =>
-            sum +
-            (Number.isFinite(Number(row.unrealised_pnl))
-              ? Number(row.unrealised_pnl)
-              : 0),
-          0
-        );
-
-        const totalRealised = result.allPositions.reduce(
-          (sum: number, row: any) =>
-            sum +
-            (Number.isFinite(Number(row.realised_pnl))
-              ? Number(row.realised_pnl)
-              : 0),
-          0
-        );
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  status: "LIVE",
-                  broker: "m.Stock",
-                  auth_mode: "TYPE_A_NORMAL_OTP",
-                  open_positions: result.openPositions,
-                  all_net_positions: result.allPositions,
-                  live_unrealised_pnl: Number(totalUnrealised.toFixed(2)),
-                  realised_pnl: Number(totalRealised.toFixed(2)),
-                  token_expiry: result.tokenExpiry,
-                  source: "m.Stock Type A positions API",
-                  read_only: true,
-                },
-                null,
-                2
-              ),
-              type: "text",
-            },
-          ],
-        };
+        const r = await liveOrOtp(env, otp);
+        if (!r.live) return result(r.auth);
+        const t = pnl(r.data.open, r.data.all);
+        return result({
+          status: "LIVE",
+          broker: "m.Stock",
+          auth_mode: "TYPE_A_NORMAL_OTP",
+          totp: false,
+          open_positions: r.data.open,
+          all_net_positions: r.data.all,
+          live_unrealised_pnl: t.unrealised,
+          realised_pnl: t.realised,
+          token_expiry: r.data.tokenExpiry,
+          source: "m.Stock Type A /openapi/typea/portfolio/positions",
+          read_only: true,
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-
-        if (message.startsWith("MSTOCK_AUTH_REQUIRED:")) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(
-                  {
-                    status: "AUTH_REQUIRED",
-                    broker: "m.Stock",
-                    auth_mode: "TYPE_A_NORMAL_OTP",
-                    totp: false,
-                    message: message.replace("MSTOCK_AUTH_REQUIRED: ", ""),
-                    next_step:
-                      "Run mstock_login with no OTP to send the normal OTP, then run mstock_login with the 6-digit OTP.",
-                    read_only: true,
-                  },
-                  null,
-                  2
-                ),
-                type: "text",
-              },
-            ],
-          };
-        }
-
-        if (message.startsWith("MSTOCK_AUTH_EXPIRED:")) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(
-                  {
-                    status: "AUTH_EXPIRED",
-                    broker: "m.Stock",
-                    auth_mode: "TYPE_A_NORMAL_OTP",
-                    totp: false,
-                    message: message.replace("MSTOCK_AUTH_EXPIRED: ", ""),
-                    next_step:
-                      "Run mstock_login with no OTP to request a fresh normal OTP, then run mstock_login with the 6-digit OTP.",
-                    read_only: true,
-                  },
-                  null,
-                  2
-                ),
-                type: "text",
-              },
-            ],
-          };
-        }
-
-        throw error;
+        return result({
+          status: "ERROR",
+          broker: "m.Stock",
+          message: message.replace(/^MSTOCK_[A-Z_]+:\s*/, ""),
+          read_only: true,
+        });
       }
     }
   );
@@ -593,88 +386,36 @@ export function registerMStockTools(server: any, env: MStockEnv): void {
   server.registerTool(
     "mstock_dashboard",
     {
-      description:
-        "Return a concise live m.Stock dashboard with open positions, live unrealised P&L, realised P&L and session status. Read-only; no order placement or broker control.",
+      description: "Return a concise live m.Stock dashboard with positions and P&L. If authentication is required, automatically request the normal OTP. Read-only.",
+      inputSchema: { otp: z.string().regex(/^\d{6}$/).optional() },
     },
-    async () => {
+    async ({ otp }) => {
       try {
-        const result = await getMStockPositions(env);
-
-        const totalUnrealised = result.openPositions.reduce(
-        (sum: number, row: any) =>
-          sum +
-          (Number.isFinite(Number(row.unrealised_pnl))
-            ? Number(row.unrealised_pnl)
-            : 0),
-        0
-      );
-
-      const totalRealised = result.allPositions.reduce(
-        (sum: number, row: any) =>
-          sum +
-          (Number.isFinite(Number(row.realised_pnl))
-            ? Number(row.realised_pnl)
-            : 0),
-        0
-      );
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  status: "LIVE",
-                  broker: "m.Stock",
-                  dashboard: dashboardText(
-                    result.openPositions,
-                    Number(totalUnrealised),
-                    Number(totalRealised),
-                    result.tokenExpiry
-                  ),
-                  positions: result.openPositions,
-                  live_unrealised_pnl: Number(totalUnrealised.toFixed(2)),
-                  realised_pnl: Number(totalRealised.toFixed(2)),
-                  token_expiry: result.tokenExpiry,
-                  read_only: true,
-                },
-                null,
-                2
-              ),
-              type: "text",
-            },
-          ],
-        };
+        const r = await liveOrOtp(env, otp);
+        if (!r.live) return result(r.auth);
+        const t = pnl(r.data.open, r.data.all);
+        return result({
+          status: "LIVE",
+          broker: "m.Stock",
+          dashboard: {
+            connection: "LIVE",
+            auth: "Type A / normal OTP",
+            open_positions: r.data.open.length,
+            live_unrealised_pnl: t.unrealised,
+            realised_pnl: t.realised,
+            token_expiry: r.data.tokenExpiry,
+            positions: r.data.open,
+          },
+          read_only: true,
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  status:
-                    message.startsWith("MSTOCK_AUTH_")
-                      ? "AUTH_REQUIRED"
-                      : "ERROR",
-                  broker: "m.Stock",
-                  auth_mode: "TYPE_A_NORMAL_OTP",
-                  totp: false,
-                  message: message
-                    .replace("MSTOCK_AUTH_REQUIRED: ", "")
-                    .replace("MSTOCK_AUTH_EXPIRED: ", ""),
-                  next_step:
-                    "If authentication is required, run mstock_login with no OTP to send a normal OTP, then run mstock_login with the 6-digit OTP.",
-                  read_only: true,
-                },
-                null,
-                2
-              ),
-              type: "text",
-            },
-          ],
-        };
+        return result({
+          status: "ERROR",
+          broker: "m.Stock",
+          message: message.replace(/^MSTOCK_[A-Z_]+:\s*/, ""),
+          read_only: true,
+        });
       }
     }
   );
@@ -682,89 +423,66 @@ export function registerMStockTools(server: any, env: MStockEnv): void {
   server.registerTool(
     "mstock_self_test",
     {
-      description:
-        "Run a read-only m.Stock Type A integration self-test: configuration, authentication and live positions. TOTP is never used.",
+      description: "Run a read-only m.Stock Type A self-test for configuration, KV storage, authentication and live positions. TOTP is never used.",
     },
     async () => {
-      const configured = Boolean(
-        env.MSTOCK_API_KEY?.trim() &&
-        env.MSTOCK_USERNAME?.trim() &&
-        env.MSTOCK_PASSWORD
-      );
+      const configured = Boolean(env.MSTOCK_API_KEY?.trim() && env.MSTOCK_USERNAME?.trim() && env.MSTOCK_PASSWORD);
+      const storage = Boolean(env.ZERODHA_TOKEN_STORE);
+      const token = await storedToken(env);
+      const loginTime = await storedLoginTime(env);
 
       const checks: Record<string, string> = {
         configuration: configured ? "PASS" : "FAIL",
+        kv_storage: storage ? "PASS" : "FAIL",
+        authentication: token ? (expired(token, loginTime) ? "EXPIRED" : "PASS") : "REQUIRED",
+        live_positions: "NOT_RUN",
       };
       const errors: Record<string, string> = {};
 
-      if (!configured) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  status: "FAIL",
-                  auth_mode: "TYPE_A_NORMAL_OTP",
-                  checks,
-                  errors: {
-                    configuration:
-                      "Missing MSTOCK_API_KEY, MSTOCK_USERNAME or MSTOCK_PASSWORD.",
-                  },
-                  read_only: true,
-                },
-                null,
-                2
-              ),
-              type: "text",
-            },
-          ],
-        };
-      }
+      if (!configured) errors.configuration = "Missing m.Stock secrets.";
+      if (!storage) errors.kv_storage = "ZERODHA_TOKEN_STORE KV binding is missing.";
 
-      const accessToken = await getStoredAccessToken(env);
-      checks.access_token = accessToken ? "PASS" : "FAIL";
-
-      if (!accessToken) {
-        errors.access_token =
-          "No stored m.Stock access token. Run mstock_login without OTP, then with the 6-digit OTP.";
-      } else {
+      if (configured && storage && token && !expired(token, loginTime)) {
         try {
-          const result = await getMStockPositions(env);
-          checks.positions = "PASS";
-          checks.live_data = result.openPositions.length >= 0 ? "PASS" : "FAIL";
+          const data = await positions(env);
+          checks.live_positions = "PASS";
+          const t = pnl(data.open, data.all);
+          return result({
+            status: "PASS",
+            broker: "m.Stock",
+            auth_mode: "TYPE_A_NORMAL_OTP",
+            totp: false,
+            checks,
+            passed: Object.values(checks).filter(v => v === "PASS").length,
+            total: Object.keys(checks).length,
+            live_unrealised_pnl: t.unrealised,
+            open_positions: data.open.length,
+            token_expiry: data.tokenExpiry,
+            errors,
+            read_only: true,
+          });
         } catch (error) {
-          checks.positions = "FAIL";
-          errors.positions =
-            error instanceof Error ? error.message : String(error);
+          checks.live_positions = "FAIL";
+          errors.live_positions = error instanceof Error ? error.message : String(error);
         }
+      } else if (checks.authentication === "REQUIRED") {
+        errors.authentication = "No daily access token. The next live command will request the normal OTP.";
+      } else if (checks.authentication === "EXPIRED") {
+        errors.authentication = "Daily access token expired. The next live command will request a fresh normal OTP.";
       }
 
-      const passed = Object.values(checks).filter((value) => value === "PASS").length;
-      const total = Object.keys(checks).length;
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                status: passed === total ? "PASS" : "FAIL",
-                auth_mode: "TYPE_A_NORMAL_OTP",
-                totp: false,
-                checks,
-                passed,
-                total,
-                errors,
-                read_only: true,
-              },
-              null,
-              2
-            ),
-            type: "text",
-          },
-        ],
-      };
+      const hardFailures = Object.values(checks).filter(v => v === "FAIL").length;
+      return result({
+        status: hardFailures ? "FAIL" : "AUTH_REQUIRED",
+        broker: "m.Stock",
+        auth_mode: "TYPE_A_NORMAL_OTP",
+        totp: false,
+        checks,
+        passed: Object.values(checks).filter(v => v === "PASS").length,
+        total: Object.keys(checks).length,
+        errors,
+        read_only: true,
+      });
     }
   );
 }
