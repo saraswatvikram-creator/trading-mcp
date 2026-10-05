@@ -50,13 +50,18 @@ function base32Decode(value: string): Uint8Array {
   let bits = 0;
   const output: number[] = [];
 
+  // Keep only the unconsumed remainder in the numeric buffer. This is
+  // important in JavaScript/Workers because bitwise operators are 32-bit;
+  // a full Base32 secret can be much longer than 32 bits.
   for (const char of normalized) {
     const index = alphabet.indexOf(char);
     buffer = (buffer << 5) | index;
     bits += 5;
+
     if (bits >= 8) {
       bits -= 8;
-      output.push((buffer >> bits) & 0xff);
+      output.push((buffer >>> bits) & 0xff);
+      buffer &= bits > 0 ? (1 << bits) - 1 : 0;
     }
   }
 
