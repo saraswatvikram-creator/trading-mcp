@@ -80,11 +80,23 @@ function decodeJwtExpiry(token: string): string | null {
 function inferredMidnightExpiry(loginTime: string | null): string | null {
   if (!loginTime) return null;
 
-  const parsed = new Date(loginTime);
+  // m.Stock login_time is documented as an IST clock value such as
+  // "2024-09-26 03:34:48". Parse it explicitly as Asia/Kolkata.
+  const match = loginTime.match(
+    /^(\\d{4})-(\\d{2})-(\\d{2})[ T](\\d{2}):(\\d{2}):(\\d{2})$/
+  );
+
+  if (!match) return null;
+
+  const [, year, month, day, hour, minute, second] = match;
+  const parsed = new Date(
+    `${year}-${month}-${day}T${hour}:${minute}:${second}+05:30`
+  );
+
   if (Number.isNaN(parsed.getTime())) return null;
 
-  // m.Stock Type A documents state that the generated JWT is valid
-  // until 12:00 AM of the generated day.
+  // Type A access tokens are documented as valid until midnight
+  // of the generated day. The next midnight in IST is 18:30 UTC.
   const expiry = new Date(parsed);
   expiry.setUTCHours(18, 30, 0, 0);
 
@@ -585,9 +597,10 @@ export function registerMStockTools(server: any, env: MStockEnv): void {
         "Return a concise live m.Stock dashboard with open positions, live unrealised P&L, realised P&L and session status. Read-only; no order placement or broker control.",
     },
     async () => {
-      const result = await getMStockPositions(env);
+      try {
+        const result = await getMStockPositions(env);
 
-      const totalUnrealised = result.openPositions.reduce(
+        const totalUnrealised = result.openPositions.reduce(
         (sum: number, row: any) =>
           sum +
           (Number.isFinite(Number(row.unrealised_pnl))
@@ -605,33 +618,62 @@ export function registerMStockTools(server: any, env: MStockEnv): void {
         0
       );
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                status: "LIVE",
-                broker: "m.Stock",
-                dashboard: dashboardText(
-                  result.openPositions,
-                  Number(totalUnrealised),
-                  Number(totalRealised),
-                  result.tokenExpiry
-                ),
-                positions: result.openPositions,
-                live_unrealised_pnl: Number(totalUnrealised.toFixed(2)),
-                realised_pnl: Number(totalRealised.toFixed(2)),
-                token_expiry: result.tokenExpiry,
-                read_only: true,
-              },
-              null,
-              2
-            ),
-            type: "text",
-          },
-        ],
-      };
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  status: "LIVE",
+                  broker: "m.Stock",
+                  dashboard: dashboardText(
+                    result.openPositions,
+                    Number(totalUnrealised),
+                    Number(totalRealised),
+                    result.tokenExpiry
+                  ),
+                  positions: result.openPositions,
+                  live_unrealised_pnl: Number(totalUnrealised.toFixed(2)),
+                  realised_pnl: Number(totalRealised.toFixed(2)),
+                  token_expiry: result.tokenExpiry,
+                  read_only: true,
+                },
+                null,
+                2
+              ),
+              type: "text",
+            },
+          ],
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  status:
+                    message.startsWith("MSTOCK_AUTH_")
+                      ? "AUTH_REQUIRED"
+                      : "ERROR",
+                  broker: "m.Stock",
+                  auth_mode: "TYPE_A_NORMAL_OTP",
+                  totp: false,
+                  message: message.replace(/^MSTOCK_AUTH_(REQUIRED|EXPIRED):\\s*/, ""),
+                  next_step:
+                    "If authentication is required, run mstock_login with no OTP to send a normal OTP, then run mstock_login with the 6-digit OTP.",
+                  read_only: true,
+                },
+                null,
+                2
+              ),
+              type: "text",
+            },
+          ],
+        };
+      }
     }
   );
 
