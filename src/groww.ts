@@ -143,11 +143,6 @@ function dashboardSummary(
   orders: any[],
   mtm: number | null
 ): string {
-  profile: any,
-  positions: any[],
-  margin: any,
-  orders: any[]
-): string {
   const fnoPositions = positions.filter(
     (row) =>
       String(row?.segment ?? "").toUpperCase() === "FNO" &&
