@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { registerAngelOneTools } from "./angelone";
+import { registerGrowwTools } from "./groww";
 import { registerFivePaisaTools, handleFivePaisaCallback } from "./fivepaisa";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
@@ -14,6 +15,9 @@ type Env = {
   ANGELONE_CLIENT_ID?: string;
   ANGELONE_PIN?: string;
   ANGELONE_TOTP_SECRET?: string;
+
+  GROWW_TOTP_TOKEN?: string;
+  GROWW_TOTP_SECRET?: string;
 
   FIVEPAISA_API_KEY?: string;
   FIVEPAISA_ENCRYPTION_KEY?: string;
@@ -450,6 +454,7 @@ function createServer(
     });
 
   registerAngelOneTools(server, env);
+  registerGrowwTools(server, env);
   registerFivePaisaTools(server, env, baseUrl);
 
   // ==========================================================
