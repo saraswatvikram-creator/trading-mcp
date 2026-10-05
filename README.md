@@ -51,3 +51,35 @@ export default {
 - [`mcp`](../mcp/) — stateful MCP server with `McpAgent` and Durable Objects
 - [`mcp-worker-authenticated`](../mcp-worker-authenticated/) — adding OAuth authentication
 - [`mcp-client`](../mcp-client/) — connecting to MCP servers as a client
+
+
+## m.Stock Type A integration
+
+The server now exposes read-only m.Stock Type A tools:
+
+- `mstock_auth_status`
+- `mstock_login`
+- `mstock_positions`
+- `mstock_dashboard`
+- `mstock_self_test`
+
+Authentication deliberately uses the **normal OTP** flow. The TOTP endpoint is not used.
+
+Required Cloudflare Worker secrets:
+
+- `MSTOCK_API_KEY`
+- `MSTOCK_USERNAME`
+- `MSTOCK_PASSWORD`
+
+The existing `ZERODHA_TOKEN_STORE` KV binding is reused only as a token store for the m.Stock access token, under separate `mstock_*` keys. No broker order placement, modification, cancellation or square-off is exposed.
+
+One-time authentication sequence:
+
+1. Set the three m.Stock secrets in the deployed Worker.
+2. Call `mstock_login` with no OTP to request the normal OTP.
+3. Call `mstock_login` with the six-digit OTP.
+4. The access token is persisted in KV.
+5. Thereafter `mstock_positions` / `mstock_dashboard` reads the live Type A positions API directly until the daily access token expires.
+6. When the token expires, repeat steps 2-3. TOTP remains disabled.
+
+The intended ChatGPT command is: **"show mstock positions"**.
