@@ -83,7 +83,7 @@ function inferredMidnightExpiry(loginTime: string | null): string | null {
   // m.Stock login_time is documented as an IST clock value such as
   // "2024-09-26 03:34:48". Parse it explicitly as Asia/Kolkata.
   const match = loginTime.match(
-    /^(\\d{4})-(\\d{2})-(\\d{2})[ T](\\d{2}):(\\d{2}):(\\d{2})$/
+    /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/
   );
 
   if (!match) return null;
