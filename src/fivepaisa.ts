@@ -499,7 +499,7 @@ export function registerFivePaisaTools(
       const tests: Array<[string, string, Record<string, unknown>]> = [
         ["margin", "/V4/Margin", {}],
         ["positions", "/V2/NetPositionNetWise", {}],
-        ["orders", "/V4/OrderBook", {}],
+        ["orders", "/V3/OrderBook", {}],
         ["trades", "/V1/TradeBook", {}],
       ];
 
