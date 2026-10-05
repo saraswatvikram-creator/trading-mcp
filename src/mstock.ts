@@ -661,7 +661,9 @@ export function registerMStockTools(server: any, env: MStockEnv): void {
                   broker: "m.Stock",
                   auth_mode: "TYPE_A_NORMAL_OTP",
                   totp: false,
-                  message: message.replace(/^MSTOCK_AUTH_(REQUIRED|EXPIRED):\\s*/, ""),
+                  message: message
+                    .replace("MSTOCK_AUTH_REQUIRED: ", "")
+                    .replace("MSTOCK_AUTH_EXPIRED: ", ""),
                   next_step:
                     "If authentication is required, run mstock_login with no OTP to send a normal OTP, then run mstock_login with the 6-digit OTP.",
                   read_only: true,
