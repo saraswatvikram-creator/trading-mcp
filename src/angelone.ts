@@ -1,4 +1,6 @@
-import { registerGrowwTools } from "./groww";\n\ntype AngelOneEnv = {
+import { registerGrowwTools } from "./groww";
+
+type AngelOneEnv = {
   ANGELONE_API_KEY?: string;
   ANGELONE_CLIENT_ID?: string;
   ANGELONE_PIN?: string;
