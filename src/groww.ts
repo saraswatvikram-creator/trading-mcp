@@ -75,7 +75,74 @@ async function growwGet(
   return data;
 }
 
+async function growwGetLtp(
+  exchangeSymbols: string[],
+  env: GrowwEnv,
+  accessToken: string
+): Promise<Record<string, number>> {
+  if (exchangeSymbols.length === 0) return {};
+
+  const params = new URLSearchParams({
+    segment: "FNO",
+    exchange_symbols: exchangeSymbols.join(","),
+  });
+
+  const response = await growwGet(
+    "/v1/live-data/ltp?" + params.toString(),
+    env,
+    accessToken
+  );
+
+  const payload = response?.payload ?? {};
+  const result: Record<string, number> = {};
+
+  for (const symbol of exchangeSymbols) {
+    const ltp = Number(payload?.[symbol]);
+    if (Number.isFinite(ltp)) result[symbol] = ltp;
+  }
+
+  return result;
+}
+
+function enrichPositionsWithMtm(
+  positions: any[],
+  ltps: Record<string, number>
+): any[] {
+  return positions.map((row) => {
+    const quantity = Number(row?.quantity ?? 0);
+    const netPrice = Number(row?.net_price ?? 0);
+    const symbol = String(row?.trading_symbol ?? "");
+    const ltp = ltps[symbol ? "NSE_" + symbol : ""];
+
+    if (!Number.isFinite(ltp) || quantity === 0 || !Number.isFinite(netPrice)) {
+      return {
+        ...row,
+        ltp: Number.isFinite(ltp) ? ltp : null,
+        unrealised_pnl: null,
+        mtm_source: "Groww Live Data unavailable",
+      };
+    }
+
+    const unrealisedPnl = quantity > 0
+      ? (ltp - netPrice) * quantity
+      : (netPrice - ltp) * Math.abs(quantity);
+
+    return {
+      ...row,
+      ltp,
+      unrealised_pnl: Number(unrealisedPnl.toFixed(2)),
+      mtm_source: "Groww Live LTP API",
+    };
+  });
+}
+
 function dashboardSummary(
+  profile: any,
+  positions: any[],
+  margin: any,
+  orders: any[],
+  mtm: number | null
+): string {
   profile: any,
   positions: any[],
   margin: any,
@@ -107,6 +174,7 @@ function dashboardSummary(
     "| F&O positions | " + fnoPositions.length + " |",
     "| Today's orders | " + orders.length + " |",
     "| Realised P&L in returned positions | ₹" + realisedPnl.toFixed(2) + " |",
+    "| Live MTM | " + (mtm === null ? "—" : "₹" + mtm.toFixed(2)) + " |",
     "| F&O margin used | ₹" + (fno.net_fno_margin_used ?? "—") + " |",
     "| Option sell balance | ₹" + (fno.option_sell_balance_available ?? "—") + " |",
     "| Client/UCC | " + (profile?.ucc ?? "—") + " |",
@@ -188,6 +256,14 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
         env,
         token.accessToken
       );
+      const positions = response?.payload?.positions ?? [];
+      const openPositions = positions.filter((row: any) => Number(row?.quantity ?? 0) !== 0);
+      const ltps = await growwGetLtp(
+        openPositions.map((row: any) => "NSE_" + String(row.trading_symbol)),
+        env,
+        token.accessToken
+      );
+      const enrichedPositions = enrichPositionsWithMtm(positions, ltps);
 
       return {
         content: [{
@@ -196,10 +272,12 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
             authenticated: true,
             auth_mode: "ACCESS_TOKEN",
             segment: "FNO",
-            positions:
-              response?.payload?.positions ??
-              response?.payload ??
-              [],
+            positions: enrichedPositions,
+            live_mtm: enrichedPositions.reduce((sum: number, row: any) => {
+              const value = Number(row?.unrealised_pnl);
+              return Number.isFinite(value) ? sum + value : sum;
+            }, 0),
+            mtm_source: "Groww Live LTP API",
             token_expiry: token.expiry,
             read_only: true,
           }, null, 2),
@@ -308,6 +386,17 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
         marginResponse?.payload ?? marginResponse;
       const orders =
         orderResponse?.payload?.order_list ?? [];
+      const openPositions = positions.filter((row: any) => Number(row?.quantity ?? 0) !== 0);
+      const ltps = await growwGetLtp(
+        openPositions.map((row: any) => "NSE_" + String(row.trading_symbol)),
+        env,
+        token.accessToken
+      );
+      const enrichedPositions = enrichPositionsWithMtm(positions, ltps);
+      const liveMtm = enrichedPositions.reduce((sum: number, row: any) => {
+        const value = Number(row?.unrealised_pnl);
+        return Number.isFinite(value) ? sum + value : sum;
+      }, 0);
 
       return {
         content: [{
@@ -317,16 +406,19 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
             auth_mode: "ACCESS_TOKEN",
             dashboard: dashboardSummary(
               profile,
-              positions,
+              enrichedPositions,
               margin,
-              orders
+              orders,
+              liveMtm
             ),
             session: {
               authenticated: true,
               token_expiry: token.expiry,
             },
             profile,
-            positions,
+            positions: enrichedPositions,
+            live_mtm: liveMtm,
+            mtm_source: "Groww Live LTP API",
             margin,
             orders,
             read_only: true,
@@ -385,6 +477,26 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
           errors[name] =
             e instanceof Error ? e.message : String(e);
         }
+      }
+
+      try {
+        const positionResponse = await growwGet(
+          "/v1/positions/user?segment=FNO",
+          env,
+          token.accessToken
+        );
+        const openPositions = (positionResponse?.payload?.positions ?? []).filter(
+          (row: any) => Number(row?.quantity ?? 0) !== 0
+        );
+        await growwGetLtp(
+          openPositions.map((row: any) => "NSE_" + String(row.trading_symbol)),
+          env,
+          token.accessToken
+        );
+        checks.live_mtm = "PASS";
+      } catch (e) {
+        checks.live_mtm = "FAIL";
+        errors.live_mtm = e instanceof Error ? e.message : String(e);
       }
 
       const passed = Object.values(checks).filter(
