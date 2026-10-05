@@ -311,10 +311,10 @@ function dashboardTable(
     "",
     "| Metric | Value |",
     "|---|---:|",
-    ...rows.map(([label, value]) => \`| \${label} | \${value ?? "—"} |\`),
+    ...rows.map(([label, value]) => `| ${label} | ${value ?? "—"} |`),
     "",
     "Read-only: positions, margin, orders and trades. No order placement, modification, cancellation or square-off is exposed.",
-  ].join("\\n");
+  ].join("\n");
 }
 
 export function registerFivePaisaTools(
