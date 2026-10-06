@@ -2,6 +2,9 @@ type FivePaisaEnv = {
   FIVEPAISA_API_KEY?: string;
   FIVEPAISA_ENCRYPTION_KEY?: string;
   FIVEPAISA_USER_ID?: string;
+  FIVEPAISA_CLIENT_CODE?: string;
+  FIVEPAISA_PIN?: string;
+  FIVEPAISA_TOTP_SECRET?: string;
   FIVEPAISA_REDIRECT_URL?: string;
   ZERODHA_TOKEN_STORE?: KVNamespace;
   FIVEPAISA_TOKEN_STORE?: KVNamespace;
@@ -11,6 +14,8 @@ const FIVEPAISA_OAUTH_URL =
   "https://dev-openapi.5paisa.com/WebVendorLogin/VLogin/Index";
 const FIVEPAISA_ACCESS_TOKEN_URL =
   "https://Openapi.5paisa.com/VendorsAPI/Service1.svc/GetAccessToken";
+const FIVEPAISA_TOTP_REQUEST_TOKEN_URL =
+  "https://Openapi.5paisa.com/VendorsAPI/Service1.svc/TOTPLogin";
 const FIVEPAISA_API_BASE =
   "https://Openapi.5paisa.com/VendorsAPI/Service1.svc";
 
@@ -45,6 +50,68 @@ function requireFivePaisaConfig(env: FivePaisaEnv): void {
         missing.join(", ")
     );
   }
+}
+
+function hasFivePaisaTotpConfig(env: FivePaisaEnv): boolean {
+  return Boolean(
+    env.FIVEPAISA_TOTP_SECRET &&
+      env.FIVEPAISA_PIN &&
+      (env.FIVEPAISA_CLIENT_CODE)
+  );
+}
+
+function base32Decode(value: string): Uint8Array {
+  const normalized = value
+    .toUpperCase()
+    .replace(/[^A-Z2-7]/g, "");
+  let buffer = 0;
+  let bits = 0;
+  const bytes: number[] = [];
+
+  for (const char of normalized) {
+    const index = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".indexOf(char);
+    if (index < 0) continue;
+    buffer = (buffer << 5) | index;
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((buffer >> bits) & 0xff);
+    }
+  }
+
+  return new Uint8Array(bytes);
+}
+
+async function generateTotp(secret: string, timestampMs = Date.now()): Promise<string> {
+  const keyBytes = base32Decode(secret);
+  if (keyBytes.length === 0) {
+    throw new Error("FIVEPAISA_TOTP_SECRET is empty or invalid.");
+  }
+
+  const counter = Math.floor(timestampMs / 1000 / 30);
+  const counterBytes = new ArrayBuffer(8);
+  const view = new DataView(counterBytes);
+  view.setUint32(0, Math.floor(counter / 0x100000000));
+  view.setUint32(4, counter >>> 0);
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "HMAC", hash: "SHA-1" },
+    false,
+    ["sign"]
+  );
+  const digest = new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, counterBytes)
+  );
+  const offset = digest[digest.length - 1] & 0x0f;
+  const binary =
+    ((digest[offset] & 0x7f) << 24) |
+    ((digest[offset + 1] & 0xff) << 16) |
+    ((digest[offset + 2] & 0xff) << 8) |
+    (digest[offset + 3] & 0xff);
+
+  return String(binary % 1_000_000).padStart(6, "0");
 }
 
 function base64UrlDecode(value: string): string {
@@ -135,6 +202,115 @@ async function createFivePaisaLoginUrl(
   url.searchParams.set("State", state);
 
   return url.toString();
+}
+
+async function authenticateFivePaisaWithTotp(
+  env: FivePaisaEnv
+): Promise<{
+  accessToken: string;
+  clientCode: string;
+  tokenExpiry: string | null;
+}> {
+  requireFivePaisaConfig(env);
+
+  if (!env.FIVEPAISA_TOTP_SECRET || !env.FIVEPAISA_PIN) {
+    throw new Error(
+      "5Paisa automatic TOTP authentication is not configured. Missing FIVEPAISA_TOTP_SECRET or FIVEPAISA_PIN."
+    );
+  }
+
+  const store = getStore(env);
+  const storedClientCode = await store.get(CLIENT_CODE_KEY);
+  const clientCode = storedClientCode ?? env.FIVEPAISA_CLIENT_CODE;
+
+  if (!clientCode) {
+    throw new Error(
+      "5Paisa automatic TOTP authentication is not configured. Set FIVEPAISA_CLIENT_CODE or complete one OAuth login first."
+    );
+  }
+
+  const totp = await generateTotp(env.FIVEPAISA_TOTP_SECRET);
+  const response = await fetch(FIVEPAISA_TOTP_REQUEST_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      head: {
+        Key: env.FIVEPAISA_API_KEY,
+      },
+      body: {
+        Email_ID: clientCode,
+        TOTP: totp,
+        PIN: env.FIVEPAISA_PIN,
+      },
+    }),
+  });
+
+  const data = await response.json();
+  const status = data?.body?.Status;
+  const requestToken = data?.body?.RequestToken;
+  const message =
+    data?.body?.Message ??
+    data?.body?.StatusDescription ??
+    data?.head?.StatusDescription ??
+    "Unknown 5Paisa TOTP authentication response";
+
+  if (!response.ok || status !== 0 || !requestToken) {
+    throw new Error(
+      "5Paisa TOTP request-token authentication failed: " +
+        JSON.stringify({
+          http_status: response.status,
+          status,
+          message,
+        })
+    );
+  }
+
+  const session = await exchangeFivePaisaRequestToken(env, requestToken);
+  return {
+    accessToken: session.accessToken,
+    clientCode: session.clientCode,
+    tokenExpiry: session.tokenExpiry,
+  };
+}
+
+async function ensureFivePaisaSession(
+  env: FivePaisaEnv,
+  baseUrl: string
+): Promise<{
+  accessToken: string | null;
+  clientCode: string | null;
+  loginTime: string | null;
+  tokenExpiry: string | null;
+  authMode: "ACTIVE" | "AUTO_TOTP" | "OAUTH_REQUIRED";
+}> {
+  let session = await getStoredFivePaisaSession(env);
+
+  if (session.accessToken && session.clientCode) {
+    return {
+      ...session,
+      authMode: "ACTIVE",
+    };
+  }
+
+  if (hasFivePaisaTotpConfig(env)) {
+    const authenticated = await authenticateFivePaisaWithTotp(env);
+    session = await getStoredFivePaisaSession(env);
+    return {
+      ...session,
+      accessToken: authenticated.accessToken,
+      clientCode: authenticated.clientCode,
+      tokenExpiry: authenticated.tokenExpiry,
+      authMode: "AUTO_TOTP",
+    };
+  }
+
+  return {
+    ...session,
+    authMode: "OAUTH_REQUIRED",
+  };
 }
 
 async function exchangeFivePaisaRequestToken(
@@ -378,6 +554,12 @@ export function registerFivePaisaTools(
                 client_code: session.clientCode,
                 login_time: session.loginTime,
                 token_expiry: session.tokenExpiry,
+                auto_totp_ready: hasFivePaisaTotpConfig(env),
+                auth_mode: session.accessToken
+                  ? "ACTIVE"
+                  : hasFivePaisaTotpConfig(env)
+                    ? "AUTO_TOTP_READY"
+                    : "OAUTH_REQUIRED",
                 read_only: true,
               },
               null,
@@ -398,7 +580,7 @@ export function registerFivePaisaTools(
     async () => {
       requireFivePaisaConfig(env);
 
-      const session = await getStoredFivePaisaSession(env);
+      const session = await ensureFivePaisaSession(env, baseUrl);
 
       if (!session.accessToken || !session.clientCode) {
         const loginUrl = await createFivePaisaLoginUrl(env, baseUrl);
@@ -410,7 +592,7 @@ export function registerFivePaisaTools(
                 {
                   status: "AUTH_REQUIRED",
                   message:
-                    "5Paisa is configured but not connected. Open the login URL, complete the normal 5Paisa login/TOTP flow, then run fivepaisa_dashboard again.",
+                    "5Paisa is configured but not connected. Automatic TOTP is not configured; open the login URL, complete the normal 5Paisa login/TOTP flow, then run fivepaisa_dashboard again.",
                   login_url: loginUrl,
                   read_only: true,
                 },
@@ -484,7 +666,7 @@ export function registerFivePaisaTools(
     },
     async () => {
       requireFivePaisaConfig(env);
-      const session = await getStoredFivePaisaSession(env);
+      const session = await ensureFivePaisaSession(env, baseUrl);
 
       if (!session.accessToken || !session.clientCode) {
         return {
@@ -495,9 +677,12 @@ export function registerFivePaisaTools(
                 {
                   status: "AUTH_REQUIRED",
                   message:
-                    "No active 5Paisa session. Connect via fivepaisa_dashboard first.",
+                    "No active 5Paisa session and automatic TOTP is not configured. Connect via fivepaisa_dashboard first.",
                   checks: {
                     configuration: "PASS",
+                    automatic_totp: hasFivePaisaTotpConfig(env)
+                      ? "PASS"
+                      : "NOT_CONFIGURED",
                     session: "FAIL",
                   },
                   read_only: true,
@@ -546,6 +731,7 @@ export function registerFivePaisaTools(
               {
                 status: passed === total ? "PASS" : "FAIL",
                 checks,
+                auth_mode: session.authMode,
                 passed,
                 total,
                 errors,
