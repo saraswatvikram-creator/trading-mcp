@@ -29,6 +29,9 @@ type Env = {
   FIVEPAISA_API_KEY?: string;
   FIVEPAISA_ENCRYPTION_KEY?: string;
   FIVEPAISA_USER_ID?: string;
+  FIVEPAISA_CLIENT_CODE?: string;
+  FIVEPAISA_PIN?: string;
+  FIVEPAISA_TOTP_SECRET?: string;
   FIVEPAISA_REDIRECT_URL?: string;
   FIVEPAISA_TOKEN_STORE?: KVNamespace;
 };
