@@ -62,11 +62,13 @@ function jwtExpiry(token: string | null) {
 
 function fallbackExpiry(loginTime: string | null) {
   if (!loginTime) return null;
+  const match = loginTime.match(/^(\d{4})-(\d{2})-(\d{2})/);
   const parsed = new Date(loginTime.replace(" ", "T") + (loginTime.includes("+") || loginTime.endsWith("Z") ? "" : "+05:30"));
-  if (Number.isNaN(parsed.getTime())) return null;
+  if (Number.isNaN(parsed.getTime()) || !match) return null;
   const twelveHours = new Date(parsed.getTime() + 12 * 60 * 60 * 1000);
-  const nextMidnight = new Date(parsed);
-  nextMidnight.setHours(24, 0, 0, 0);
+  const [, y, mo, d] = match;
+  const nextMidnight = new Date(`${y}-${mo}-${d}T00:00:00+05:30`);
+  nextMidnight.setUTCDate(nextMidnight.getUTCDate() + 1);
   return new Date(Math.min(twelveHours.getTime(), nextMidnight.getTime())).toISOString();
 }
 
