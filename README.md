@@ -1,61 +1,10 @@
-# MCP Server (createMcpHandler)
+# Trading MCP Server
 
-The simplest way to run a stateless MCP server on Cloudflare Workers. Uses `createMcpHandler` from the Agents SDK to handle all MCP protocol details in one line.
-
-## What it demonstrates
-
-- **`createMcpHandler`** — the Agents SDK helper that turns an `McpServer` factory into a Worker-compatible fetch handler
-- **Minimal setup** — define tools in a factory, pass the factory to `createMcpHandler`, done
-- **Stateless** — no Durable Objects, no persistent state, each request is independent
-
-## Running
-
-```sh
-pnpm install
-pnpm start
-```
-
-Open the browser to see the built-in tool tester, or connect with the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) at `http://localhost:5173/mcp`.
-
-## How it works
-
-```typescript
-import { McpServer } from "@modelcontextprotocol/server";
-import { createMcpHandler } from "agents/mcp/server";
-import { z } from "zod";
-
-function createServer() {
-  const server = new McpServer({ name: "Hello MCP Server", version: "1.0.0" });
-  server.registerTool(
-    "hello",
-    {
-      description: "Returns a greeting",
-      inputSchema: { name: z.string().optional() }
-    },
-    async ({ name }) => ({
-      content: [{ type: "text", text: `Hello, ${name ?? "World"}!` }]
-    })
-  );
-  return server;
-}
-
-export default {
-  fetch(request, env, ctx) {
-    return createMcpHandler(createServer)(request, env, ctx);
-  }
-} satisfies ExportedHandler;
-```
-
-## Related examples
-
-- [`mcp`](../mcp/) — stateful MCP server with `McpAgent` and Durable Objects
-- [`mcp-worker-authenticated`](../mcp-worker-authenticated/) — adding OAuth authentication
-- [`mcp-client`](../mcp-client/) — connecting to MCP servers as a client
-
+Cloudflare Worker MCP server for the read-only Trading Desk broker integrations.
 
 ## m.Stock Type A integration
 
-The server now exposes read-only m.Stock Type A tools:
+The server exposes:
 
 - `mstock_auth_status`
 - `mstock_login`
@@ -63,39 +12,54 @@ The server now exposes read-only m.Stock Type A tools:
 - `mstock_dashboard`
 - `mstock_self_test`
 
-Authentication deliberately uses the **normal OTP** flow. The TOTP endpoint is not used.
+Authentication is now **Type A TOTP**. The Worker calls the documented m.Stock endpoint:
 
-Required Cloudflare Worker secrets:
+`POST /openapi/typea/session/verifytotp`
+
+and generates the current 6-digit TOTP locally from the `MSTOCK_TOTP_SECRET` Cloudflare Worker secret. The normal SMS OTP endpoint is not used.
+
+### Required Cloudflare secrets
 
 - `MSTOCK_API_KEY`
-- `MSTOCK_USERNAME`
-- `MSTOCK_PASSWORD`
+- `MSTOCK_TOTP_SECRET`
 
-The existing `ZERODHA_TOKEN_STORE` KV binding is reused only as a token store for the m.Stock access token, under separate `mstock_*` keys. No broker order placement, modification, cancellation or square-off is exposed.
+The existing `ZERODHA_TOKEN_STORE` KV binding is reused only for the m.Stock access token and login time.
 
-One-time authentication sequence:
+`MSTOCK_USERNAME` and `MSTOCK_PASSWORD` are no longer required for m.Stock authentication.
 
-1. Set the three m.Stock secrets in the deployed Worker.
-2. Call `mstock_login` with no OTP to request the normal OTP.
-3. Call `mstock_login` with the six-digit OTP.
-4. The access token is persisted in KV.
-5. Thereafter `mstock_positions` / `mstock_dashboard` reads the live Type A positions API directly until the daily access token expires.
-6. When the token expires, repeat steps 2-3. TOTP remains disabled.
+### Intended ChatGPT workflow
 
-The intended ChatGPT command is: **"show mstock positions"**.
+The preferred command is:
 
-### m.Stock live-position UX
+**show mstock positions**
 
-The preferred command is **"show mstock positions"**.
+Behaviour:
 
-- The tool reads the live Type A net-position endpoint.
-- If the daily session token is missing/expired, the tool automatically requests the normal OTP.
-- The same `mstock_positions` tool accepts an optional 6-digit `otp`; after authentication it immediately returns live positions and P&L.
-- A 90-second OTP request cooldown prevents repeated OTP spam.
-- The access token and login time are persisted in the existing `ZERODHA_TOKEN_STORE` KV namespace.
-- TOTP is disabled and the TOTP endpoint is never called.
-- No order placement, modification, cancellation, conversion or square-off capability is exposed.
-- m.Stock Type A access tokens are daily sessions; a fresh normal OTP is therefore required after the broker session expires. This is an m.Stock authentication constraint, not a Worker error.
+1. If a valid m.Stock access token is already stored in KV, the Worker uses it directly.
+2. If the token is missing or expired, the Worker generates the current TOTP from `MSTOCK_TOTP_SECRET`.
+3. It calls m.Stock Type A `/openapi/typea/session/verifytotp`.
+4. The returned access token is persisted in KV.
+5. The Worker immediately calls `/openapi/typea/portfolio/positions`.
+6. ChatGPT receives the live positions and P&L.
 
-The Type A API contract used here is the documented flow: login with username/password, exchange the OTP at `/openapi/typea/session/token` with `api_key`, `request_token` and `checksum=L`, then read `/openapi/typea/portfolio/positions` using `Authorization: token api_key:access_token`.
+A manual 6-digit TOTP remains available as an optional fallback to the MCP tools, but it should not be required in normal operation.
 
+m.Stock access tokens are still daily sessions; TOTP removes the manual SMS-OTP step, not the broker's session expiry.
+
+### Enabling TOTP in m.Stock
+
+1. Log in to `trade.mstock.com`.
+2. Open **Trading APIs**.
+3. Click **Generate TOTP** / **Enable TOTP**.
+4. Complete the authenticator-app setup.
+5. Preserve the TOTP secret from the setup QR/code.
+6. Store that secret in Cloudflare as `MSTOCK_TOTP_SECRET`.
+
+Do not put the API key or TOTP secret in ChatGPT messages.
+
+### Security
+
+- Read-only broker integration.
+- No order placement, modification, cancellation, conversion or square-off is exposed.
+- API key and TOTP secret remain Cloudflare Worker secrets.
+- Access tokens remain in the existing KV namespace under `mstock_*` keys.
