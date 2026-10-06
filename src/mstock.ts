@@ -484,3 +484,5 @@ export function registerMStockTools(server: any, env: MStockEnv): void {
     }
   );
 }
+
+// Deployment refresh: ensure latest Cloudflare m.Stock secrets are active in production.
