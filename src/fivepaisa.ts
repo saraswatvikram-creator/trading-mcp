@@ -659,6 +659,79 @@ export function registerFivePaisaTools(
   );
 
   server.registerTool(
+    "fivepaisa_totp_self_test",
+    {
+      description:
+        "Force a direct 5Paisa TOTP authentication test using the configured Cloudflare TOTP secret and PIN. Refreshes the read-only API session and never places, modifies, cancels or squares off orders.",
+    },
+    async () => {
+      requireFivePaisaConfig(env);
+
+      if (!hasFivePaisaTotpConfig(env)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  status: "NOT_CONFIGURED",
+                  message:
+                    "Set FIVEPAISA_TOTP_SECRET and FIVEPAISA_PIN, and either FIVEPAISA_CLIENT_CODE or complete one OAuth login first.",
+                  read_only: true,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
+      try {
+        const session = await authenticateFivePaisaWithTotp(env);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  status: "PASS",
+                  authenticated: true,
+                  client_code: session.clientCode,
+                  token_expiry: session.tokenExpiry,
+                  auth_mode: "AUTO_TOTP",
+                  read_only: true,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  status: "FAIL",
+                  authenticated: false,
+                  message:
+                    error instanceof Error ? error.message : String(error),
+                  read_only: true,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+    }
+  );
+
+  server.registerTool(
     "fivepaisa_self_test",
     {
       description:
