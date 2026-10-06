@@ -24,6 +24,7 @@ type Env = {
   MSTOCK_USERNAME?: string;
   MSTOCK_PASSWORD?: string;
   MSTOCK_ACCESS_TOKEN?: string;
+  MSTOCK_TOTP_SECRET?: string;
 
   FIVEPAISA_API_KEY?: string;
   FIVEPAISA_ENCRYPTION_KEY?: string;
