@@ -238,6 +238,69 @@ async function generateGrowwAccessToken(env: GrowwEnv): Promise<{
   return { accessToken, expiry };
 }
 
+
+async function growwGetLtp(
+  exchangeSymbols: string[],
+  env: GrowwEnv,
+  accessToken: string
+): Promise<Record<string, number>> {
+  if (exchangeSymbols.length === 0) return {};
+
+  const params = new URLSearchParams({
+    segment: "FNO",
+    exchange_symbols: exchangeSymbols.join(","),
+  });
+
+  const response = await growwGet(
+    "/v1/live-data/ltp?" + params.toString(),
+    env,
+    accessToken
+  );
+
+  const payload = response?.payload ?? {};
+  const result: Record<string, number> = {};
+
+  for (const symbol of exchangeSymbols) {
+    const ltp = Number(payload?.[symbol]);
+    if (Number.isFinite(ltp)) result[symbol] = ltp;
+  }
+
+  return result;
+}
+
+function enrichPositionsWithMtm(
+  positions: any[],
+  ltps: Record<string, number>
+): any[] {
+  return positions.map((row) => {
+    const quantity = Number(row?.quantity ?? 0);
+    const netPrice = Number(row?.net_price ?? 0);
+    const symbol = String(row?.trading_symbol ?? "");
+    const ltp = ltps[symbol ? "NSE_" + symbol : ""];
+
+    if (!Number.isFinite(ltp) || quantity === 0 || !Number.isFinite(netPrice)) {
+      return {
+        ...row,
+        ltp: Number.isFinite(ltp) ? ltp : null,
+        unrealised_pnl: null,
+        mtm_source: "Groww Live Data unavailable",
+      };
+    }
+
+    const unrealisedPnl =
+      quantity > 0
+        ? (ltp - netPrice) * quantity
+        : (netPrice - ltp) * Math.abs(quantity);
+
+    return {
+      ...row,
+      ltp,
+      unrealised_pnl: Number(unrealisedPnl.toFixed(2)),
+      mtm_source: "Groww Live LTP API",
+    };
+  });
+}
+
 async function growwGet(
   path: string,
   env: GrowwEnv,
