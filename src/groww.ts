@@ -184,7 +184,7 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
     "groww_auth_status",
     {
       description:
-        "Check Groww direct ACCESS TOKEN configuration and decode its expiry when available. Read-only; never exposes the token.",
+        "Validate the configured Groww direct ACCESS TOKEN against a real Groww API call, report expiry and live API status, and never expose the token. Read-only.",
     },
     async () => {
       const configured = Boolean(env.GROWW_ACCESS_TOKEN?.trim());
@@ -192,13 +192,42 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
         ? getJwtExpiry(env.GROWW_ACCESS_TOKEN!.trim())
         : null;
 
+      let authenticated = false;
+      let validation = "INVALID_OR_MISSING";
+      let validation_error: string | null = null;
+
+      if (!configured) {
+        validation_error =
+          "Missing Cloudflare secret GROWW_ACCESS_TOKEN. Add the current Groww TradingDesk ACCESS TOKEN.";
+      } else if (expiry && Date.parse(expiry) <= Date.now()) {
+        validation = "EXPIRED";
+        validation_error =
+          "Groww ACCESS TOKEN has expired. Generate the current TradingDesk ACCESS TOKEN in Groww and update the Cloudflare secret GROWW_ACCESS_TOKEN.";
+      } else {
+        try {
+          await growwGet(
+            "/v1/user/detail",
+            env,
+            env.GROWW_ACCESS_TOKEN!.trim()
+          );
+          authenticated = true;
+          validation = "VALID";
+        } catch (error) {
+          validation_error =
+            error instanceof Error ? error.message : String(error);
+        }
+      }
+
       return {
         content: [{
           type: "text",
           text: JSON.stringify({
             configured,
+            authenticated,
             auth_mode: "ACCESS_TOKEN",
             token_expiry: expiry,
+            validation,
+            validation_error,
             note:
               "Groww direct access token is used exactly as supplied. " +
               "It expires daily at 6 AM and must be regenerated in Groww and updated as GROWW_ACCESS_TOKEN.",
