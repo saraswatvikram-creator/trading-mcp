@@ -273,10 +273,36 @@ async function handleZerodhaLogin(
           ?.login_time ??
           new Date().toISOString()
       );
+
+      // Validate the newly issued session against a real Zerodha API
+      // call before telling the user that authentication succeeded.
+      try {
+        await zerodhaGet(
+          "/user/profile",
+          env
+        );
+      } catch (error) {
+        await env.ZERODHA_TOKEN_STORE.delete(
+          "access_token"
+        );
+        await env.ZERODHA_TOKEN_STORE.delete(
+          "login_time"
+        );
+
+        return new Response(
+          "Zerodha authentication produced a token that was rejected by the Zerodha API: " +
+            (error instanceof Error
+              ? error.message
+              : String(error)),
+          {
+            status: 502,
+          }
+        );
+      }
     }
 
     return new Response(
-      "Zerodha authentication successful. Your daily trading session is now connected. You can close this window.",
+      "Zerodha authentication successful. Your daily trading session is now connected and API-validated. You can close this window.",
       {
         status: 200,
         headers: {
@@ -501,7 +527,7 @@ function createServer(
     "zerodha_auth_status",
     {
       description:
-        "Check whether a Zerodha access token is currently available. Read-only.",
+        "Check whether the stored Zerodha access token exists and is accepted by the Zerodha API. Read-only.",
     },
 
     async () => {
@@ -521,23 +547,51 @@ function createServer(
               )
           : null;
 
+      let authenticated = false;
+      let validation_error = null;
+
+      if (token) {
+        try {
+          await zerodhaGet(
+            "/user/profile",
+            env
+          );
+          authenticated = true;
+        } catch (error) {
+          validation_error =
+            error instanceof Error
+              ? error.message
+              : String(error);
+
+          // Remove a token that Zerodha has rejected so a stale
+          // credential can never be reported as authenticated.
+          if (env.ZERODHA_TOKEN_STORE) {
+            await env.ZERODHA_TOKEN_STORE.delete(
+              "access_token"
+            );
+          }
+        }
+      }
+
       return {
         content: [
           {
             text: JSON.stringify(
               {
-                authenticated:
-                  Boolean(
-                    token
-                  ),
-
+                authenticated,
                 login_time:
-                  loginTime,
+                  authenticated
+                    ? loginTime
+                    : null,
+                validation:
+                  authenticated
+                    ? "VALID"
+                    : "INVALID_OR_MISSING",
+                validation_error,
               },
               null,
               2
             ),
-
             type: "text",
           },
         ],
