@@ -173,7 +173,6 @@ async function clearFivePaisaSession(env: FivePaisaEnv): Promise<void> {
   const store = getStore(env);
   await Promise.all([
     store.delete(ACCESS_TOKEN_KEY),
-    store.delete(CLIENT_CODE_KEY),
     store.delete(LOGIN_TIME_KEY),
     store.delete(TOKEN_EXPIRY_KEY),
   ]);
@@ -371,7 +370,7 @@ async function exchangeFivePaisaRequestToken(
   // a token that is not a JWT (and therefore has no readable exp claim).
   await Promise.all([
     store.put(ACCESS_TOKEN_KEY, accessToken, { expirationTtl: 12 * 60 * 60 }),
-    store.put(CLIENT_CODE_KEY, String(clientCode), { expirationTtl: 12 * 60 * 60 }),
+    store.put(CLIENT_CODE_KEY, String(clientCode)),
     store.put(LOGIN_TIME_KEY, now.toISOString(), { expirationTtl: 12 * 60 * 60 }),
     store.put(TOKEN_EXPIRY_KEY, tokenExpiry, { expirationTtl: 12 * 60 * 60 }),
   ]);
