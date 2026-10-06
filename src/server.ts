@@ -17,7 +17,7 @@ type Env = {
   ANGELONE_PIN?: string;
   ANGELONE_TOTP_SECRET?: string;
 
-  GROWW_ACCESS_TOKEN?: string;
+  GROWW_TOTP_TOKEN?: string;\n  GROWW_TOTP_SECRET?: string;
 
   MSTOCK_API_KEY?: string;
   MSTOCK_USERNAME?: string;
