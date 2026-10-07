@@ -306,56 +306,7 @@ function result(payload: any) {
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
 }
 
-export function registerMStockTools(server: any, env: MStockEnv): void {
-  server.registerTool(
-    "mstock_auth_status",
-    {
-      description: "Check m.Stock Type A TOTP configuration and stored session state. Read-only.",
-    },
-    async () => {
-      const configured = Boolean(env.MSTOCK_API_KEY?.trim() && env.MSTOCK_TOTP_SECRET?.trim());
-      const token = await storedToken(env);
-      const loginTime = await storedLoginTime(env);
-      return result({
-        status: configured && Boolean(env.ZERODHA_TOKEN_STORE) ? "CONFIGURED" : "CONFIG_REQUIRED",
-        broker: "m.Stock",
-        auth_mode: "TYPE_A_TOTP",
-        totp: true,
-        totp_secret_configured: Boolean(env.MSTOCK_TOTP_SECRET?.trim()),
-        api_key_configured: Boolean(env.MSTOCK_API_KEY?.trim()),
-        kv_storage_configured: Boolean(env.ZERODHA_TOKEN_STORE),
-        access_token_stored: Boolean(token),
-        token_expired: token ? expired(token, loginTime) : null,
-        token_expiry: expiry(token, loginTime),
-        read_only: true,
-      });
-    }
-  );
-
-  server.registerTool(
-    "mstock_login",
-    {
-      description: "Authenticate m.Stock Type A using the Cloudflare MSTOCK_TOTP_SECRET. The Worker generates the current TOTP automatically. A manual 6-digit TOTP is supported as a fallback. Read-only.",
-      inputSchema: { totp: z.string().regex(/^\d{6}$/).optional() },
-    },
-    async ({ totp }) => {
-      try {
-        return result(await loginWithTotp(env, totp));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return result({
-          status: message.startsWith("MSTOCK_TOTP_INVALID:") ? "TOTP_INVALID" : "ERROR",
-          broker: "m.Stock",
-          auth_mode: "TYPE_A_TOTP",
-          totp: true,
-          message: message.replace(/^MSTOCK_[A-Z_]+:\s*/, ""),
-          read_only: true,
-        });
-      }
-    }
-  );
-
-export async function getMStockHoldings(env: MStockEnv, totp?: string): Promise<any> {
+export export async function getMStockHoldings(env: MStockEnv, totp?: string): Promise<any> {
   const r = await liveOrTotp(env, totp);
   if (!r.live) return r.auth;
 
@@ -421,6 +372,56 @@ export async function getMStockHoldings(env: MStockEnv, totp?: string): Promise<
     read_only: true,
   };
 }
+
+
+function registerMStockTools(server: any, env: MStockEnv): void {
+  server.registerTool(
+    "mstock_auth_status",
+    {
+      description: "Check m.Stock Type A TOTP configuration and stored session state. Read-only.",
+    },
+    async () => {
+      const configured = Boolean(env.MSTOCK_API_KEY?.trim() && env.MSTOCK_TOTP_SECRET?.trim());
+      const token = await storedToken(env);
+      const loginTime = await storedLoginTime(env);
+      return result({
+        status: configured && Boolean(env.ZERODHA_TOKEN_STORE) ? "CONFIGURED" : "CONFIG_REQUIRED",
+        broker: "m.Stock",
+        auth_mode: "TYPE_A_TOTP",
+        totp: true,
+        totp_secret_configured: Boolean(env.MSTOCK_TOTP_SECRET?.trim()),
+        api_key_configured: Boolean(env.MSTOCK_API_KEY?.trim()),
+        kv_storage_configured: Boolean(env.ZERODHA_TOKEN_STORE),
+        access_token_stored: Boolean(token),
+        token_expired: token ? expired(token, loginTime) : null,
+        token_expiry: expiry(token, loginTime),
+        read_only: true,
+      });
+    }
+  );
+
+  server.registerTool(
+    "mstock_login",
+    {
+      description: "Authenticate m.Stock Type A using the Cloudflare MSTOCK_TOTP_SECRET. The Worker generates the current TOTP automatically. A manual 6-digit TOTP is supported as a fallback. Read-only.",
+      inputSchema: { totp: z.string().regex(/^\d{6}$/).optional() },
+    },
+    async ({ totp }) => {
+      try {
+        return result(await loginWithTotp(env, totp));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return result({
+          status: message.startsWith("MSTOCK_TOTP_INVALID:") ? "TOTP_INVALID" : "ERROR",
+          broker: "m.Stock",
+          auth_mode: "TYPE_A_TOTP",
+          totp: true,
+          message: message.replace(/^MSTOCK_[A-Z_]+:\s*/, ""),
+          read_only: true,
+        });
+      }
+    }
+  );
 
   server.registerTool(
     "mstock_holdings",
