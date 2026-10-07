@@ -329,10 +329,50 @@ async function growwGet(
   return data;
 }
 
+async function invalidateCachedGrowwToken(env: GrowwEnv): Promise<void> {
+  if (!env.ZERODHA_TOKEN_STORE) return;
+
+  await Promise.all([
+    env.ZERODHA_TOKEN_STORE.delete(GROWW_ACCESS_TOKEN_KEY),
+    env.ZERODHA_TOKEN_STORE.delete(GROWW_ACCESS_EXPIRY_KEY),
+  ]);
+}
+
 async function withGrowwToken(
   env: GrowwEnv
 ): Promise<{ accessToken: string; expiry: string | null }> {
   return generateGrowwAccessToken(env);
+}
+
+// Execute one Groww API request and automatically recover from a stale/revoked
+// access token. A 401 invalidates the cached token, generates a fresh TOTP
+// access token, and retries exactly once.
+async function growwGetWithAutoRefresh(
+  path: string,
+  env: GrowwEnv
+): Promise<{ data: any; expiry: string | null }> {
+  let token = await withGrowwToken(env);
+
+  try {
+    return {
+      data: await growwGet(path, env, token.accessToken),
+      expiry: token.expiry,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    if (!message.includes("Groww API error 401")) {
+      throw error;
+    }
+
+    await invalidateCachedGrowwToken(env);
+    token = await generateGrowwAccessToken(env);
+
+    return {
+      data: await growwGet(path, env, token.accessToken),
+      expiry: token.expiry,
+    };
+  }
 }
 
 function dashboardSummary(
@@ -395,10 +435,14 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
 
       if (configured) {
         try {
-          const token = await withGrowwToken(env);
-          authenticated = Boolean(token.accessToken);
-          expiry = token.expiry;
+          const result = await growwGetWithAutoRefresh(
+            "/v1/user/detail",
+            env
+          );
+          authenticated = true;
+          expiry = result.expiry;
         } catch (e) {
+          authenticated = false;
           error = e instanceof Error ? e.message : String(e);
         }
       }
@@ -425,8 +469,9 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
         "Authenticate to Groww using the configured TOTP secret and return the authenticated user profile. Read-only.",
     },
     async () => {
-      const token = await withGrowwToken(env);
-      const profile = await growwGet("/v1/user/detail", env, token.accessToken);
+      const result = await growwGetWithAutoRefresh("/v1/user/detail", env);
+      const profile = result.data;
+      const token = { expiry: result.expiry };
 
       return {
         content: [{
@@ -448,12 +493,12 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
         "Authenticate to Groww using TOTP and return current F&O positions with live LTP-based MTM. Read-only. This is the primary Groww positions command.",
     },
     async () => {
-      const token = await withGrowwToken(env);
-      const response = await growwGet(
+      const result = await growwGetWithAutoRefresh(
         "/v1/positions/user?segment=FNO",
-        env,
-        token.accessToken
+        env
       );
+      const token = { expiry: result.expiry };
+      const response = result.data;
       const positions = response?.payload?.positions ?? response?.payload ?? [];
       const openPositions = positions.filter(
         (row: any) => Number(row?.quantity ?? 0) !== 0
@@ -494,12 +539,12 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
         "Return current Groww available margin, including F&O margin details. Read-only.",
     },
     async () => {
-      const token = await withGrowwToken(env);
-      const margin = await growwGet(
+      const result = await growwGetWithAutoRefresh(
         "/v1/margins/detail/user",
-        env,
-        token.accessToken
+        env
       );
+      const token = { expiry: result.expiry };
+      const margin = result.data;
 
       return {
         content: [{
@@ -522,12 +567,12 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
         "Return today's Groww F&O order list. Read-only. No order placement or modification is exposed.",
     },
     async () => {
-      const token = await withGrowwToken(env);
-      const orders = await growwGet(
+      const result = await growwGetWithAutoRefresh(
         "/v1/order/list?segment=FNO&page=0&page_size=100",
-        env,
-        token.accessToken
+        env
       );
+      const token = { expiry: result.expiry };
+      const orders = result.data;
 
       return {
         content: [{
