@@ -419,76 +419,7 @@ function dashboardSummary(
   ].join("\n");
 }
 
-export function registerGrowwTools(server: any, env: GrowwEnv): void {
-  server.registerTool(
-    "groww_auth_status",
-    {
-      description:
-        "Validate Groww TOTP configuration and generate a current access token automatically. Read-only; never exposes credentials or tokens.",
-    },
-    async () => {
-      const configured =
-        Boolean(env.GROWW_TOTP_TOKEN) &&
-        Boolean(env.GROWW_TOTP_SECRET);
-
-      let authenticated = false;
-      let expiry: string | null = null;
-      let error: string | null = null;
-
-      if (configured) {
-        try {
-          const result = await growwGetWithAutoRefresh(
-            "/v1/user/detail",
-            env
-          );
-          authenticated = true;
-          expiry = result.expiry;
-        } catch (e) {
-          authenticated = false;
-          error = e instanceof Error ? e.message : String(e);
-        }
-      }
-
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            configured,
-            authenticated,
-            token_expiry: expiry,
-            error,
-            read_only: true,
-          }, null, 2),
-        }],
-      };
-    }
-  );
-
-  server.registerTool(
-    "groww_profile",
-    {
-      description:
-        "Authenticate to Groww using the configured TOTP secret and return the authenticated user profile. Read-only.",
-    },
-    async () => {
-      const result = await growwGetWithAutoRefresh("/v1/user/detail", env);
-      const profile = result.data;
-      const token = { expiry: result.expiry };
-
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            authenticated: true,
-            profile: profile?.payload ?? profile,
-            token_expiry: token.expiry,
-          }, null, 2),
-        }],
-      };
-    }
-  );
-
-export async function getGrowwHoldings(env: GrowwEnv): Promise<any> {
+export export async function getGrowwHoldings(env: GrowwEnv): Promise<any> {
   const result = await growwGetWithAutoRefresh("/v1/holdings/user", env);
   const token = result;
   const response = result.data;
@@ -563,6 +494,76 @@ export async function getGrowwHoldings(env: GrowwEnv): Promise<any> {
     read_only: true,
   };
 }
+
+
+function registerGrowwTools(server: any, env: GrowwEnv): void {
+  server.registerTool(
+    "groww_auth_status",
+    {
+      description:
+        "Validate Groww TOTP configuration and generate a current access token automatically. Read-only; never exposes credentials or tokens.",
+    },
+    async () => {
+      const configured =
+        Boolean(env.GROWW_TOTP_TOKEN) &&
+        Boolean(env.GROWW_TOTP_SECRET);
+
+      let authenticated = false;
+      let expiry: string | null = null;
+      let error: string | null = null;
+
+      if (configured) {
+        try {
+          const result = await growwGetWithAutoRefresh(
+            "/v1/user/detail",
+            env
+          );
+          authenticated = true;
+          expiry = result.expiry;
+        } catch (e) {
+          authenticated = false;
+          error = e instanceof Error ? e.message : String(e);
+        }
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            configured,
+            authenticated,
+            token_expiry: expiry,
+            error,
+            read_only: true,
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "groww_profile",
+    {
+      description:
+        "Authenticate to Groww using the configured TOTP secret and return the authenticated user profile. Read-only.",
+    },
+    async () => {
+      const result = await growwGetWithAutoRefresh("/v1/user/detail", env);
+      const profile = result.data;
+      const token = { expiry: result.expiry };
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            authenticated: true,
+            profile: profile?.payload ?? profile,
+            token_expiry: token.expiry,
+          }, null, 2),
+        }],
+      };
+    }
+  );
 
   server.registerTool(
     "groww_holdings",
