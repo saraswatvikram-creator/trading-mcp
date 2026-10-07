@@ -479,6 +479,68 @@ async function getNfoInstrumentMaster(
 // MCP SERVER
 // ============================================================
 
+async function getZerodhaInvestmentHoldings(env: Env): Promise<any> {
+  const response = await zerodhaGet("/portfolio/holdings", env) as any;
+  const rows = Array.isArray(response?.data) ? response.data : [];
+  const equity = rows.map((r: any) => {
+    const quantity = Number(r?.quantity ?? 0);
+    const average = Number(r?.average_price);
+    const ltp = Number(r?.last_price);
+    const investmentValue = Number.isFinite(average) ? average * quantity : null;
+    const currentValue = Number.isFinite(ltp) ? ltp * quantity : null;
+    const brokerPnl = Number(r?.pnl);
+    const pnl = Number.isFinite(brokerPnl) ? brokerPnl : investmentValue !== null && currentValue !== null ? currentValue - investmentValue : null;
+    return {
+      asset_class: "Equity",
+      symbol: r?.tradingsymbol ?? null,
+      exchange: r?.exchange ?? null,
+      isin: r?.isin ?? null,
+      quantity,
+      average_price: Number.isFinite(average) ? average : null,
+      ltp: Number.isFinite(ltp) ? ltp : null,
+      investment_value: investmentValue,
+      current_value: currentValue,
+      pnl,
+      pnl_percent: pnl !== null && investmentValue ? (pnl / investmentValue) * 100 : null,
+    };
+  });
+
+  const mfResponse = await zerodhaGet("/mf/holdings", env) as any;
+  const mfRows = Array.isArray(mfResponse?.data) ? mfResponse.data : [];
+  const mutualFunds = mfRows.map((r: any) => {
+    const quantity = Number(r?.quantity ?? 0);
+    const average = Number(r?.average_price);
+    const ltp = Number(r?.last_price);
+    const investmentValue = Number.isFinite(average) ? average * quantity : null;
+    const currentValue = Number.isFinite(ltp) ? ltp * quantity : null;
+    const pnl = Number.isFinite(Number(r?.pnl)) ? Number(r.pnl) : investmentValue !== null && currentValue !== null ? currentValue - investmentValue : null;
+    return {
+      asset_class: "Mutual Fund",
+      fund: r?.fund ?? null,
+      symbol: r?.tradingsymbol ?? null,
+      isin: r?.isin ?? r?.tradingsymbol ?? null,
+      folio: r?.folio ?? null,
+      quantity,
+      average_price: Number.isFinite(average) ? average : null,
+      ltp: Number.isFinite(ltp) ? ltp : null,
+      investment_value: investmentValue,
+      current_value: currentValue,
+      pnl,
+      pnl_percent: pnl !== null && investmentValue ? (pnl / investmentValue) * 100 : null,
+    };
+  });
+
+  const holdings = [...equity, ...mutualFunds];
+  const summary = holdings.reduce((s: any, h: any) => {
+    if (Number.isFinite(h.investment_value)) s.investment_value += h.investment_value;
+    if (Number.isFinite(h.current_value)) s.current_value += h.current_value;
+    return s;
+  }, { investment_value: 0, current_value: 0 });
+  summary.pnl = summary.current_value - summary.investment_value;
+  summary.pnl_percent = summary.investment_value ? (summary.pnl / summary.investment_value) * 100 : null;
+  return { authenticated: true, broker: "Zerodha", holdings, summary, read_only: true };
+}
+
 function createServer(
   env: Env,
   baseUrl: string
