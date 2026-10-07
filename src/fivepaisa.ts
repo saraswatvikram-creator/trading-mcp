@@ -570,80 +570,82 @@ export function registerFivePaisaTools(
     }
   );
 
+export async function getFivePaisaHoldings(env: FivePaisaEnv, baseUrl: string): Promise<any> {
+  requireFivePaisaConfig(env);
+  const session = await ensureFivePaisaSession(env, baseUrl);
+  if (!session.accessToken || !session.clientCode) {
+    throw new Error("5Paisa authentication is required before holdings can be read.");
+  }
+
+  const response = await fivePaisaPost(env, "/V3/Holding", {});
+  const rows = Array.isArray(response?.body?.Data) ? response.body.Data : [];
+  const normalized = rows.map((row: any) => {
+    const quantity = Number(row?.Quantity ?? 0);
+    const average = Number(row?.AvgRate);
+    const ltp = Number(row?.CurrentPrice);
+    const investmentValue = Number.isFinite(average) ? average * quantity : null;
+    const currentValue = Number.isFinite(ltp) ? ltp * quantity : null;
+    const pnl = investmentValue !== null && currentValue !== null
+      ? currentValue - investmentValue : null;
+    const pnlPercent = pnl !== null && investmentValue
+      ? (pnl / investmentValue) * 100 : null;
+
+    return {
+      symbol: row?.Symbol ?? null,
+      exchange: row?.Exch === "N" ? "NSE" : row?.Exch ?? null,
+      isin: row?.ISIN ?? null,
+      quantity,
+      average_price: Number.isFinite(average) ? average : null,
+      ltp: Number.isFinite(ltp) ? ltp : null,
+      investment_value: investmentValue,
+      current_value: currentValue,
+      pnl,
+      pnl_percent: pnlPercent,
+      dp_quantity: Number(row?.DPQty ?? 0),
+      mtf_quantity: Number(row?.MTFQty ?? 0),
+      mtf_pledge: Number(row?.MTFPledge ?? 0),
+      pool_quantity: Number(row?.PoolQty ?? 0),
+      e_dis_authorized: row?.POASigned ?? null,
+    };
+  });
+
+  const summary = normalized.reduce(
+    (s: any, row: any) => {
+      if (Number.isFinite(row.investment_value)) s.investment_value += row.investment_value;
+      if (Number.isFinite(row.current_value)) s.current_value += row.current_value;
+      return s;
+    },
+    { investment_value: 0, current_value: 0 }
+  );
+  summary.pnl = summary.current_value - summary.investment_value;
+  summary.pnl_percent = summary.investment_value
+    ? (summary.pnl / summary.investment_value) * 100
+    : null;
+
+  return {
+    authenticated: true,
+    broker: "5Paisa",
+    holdings: normalized,
+    summary,
+    auth_mode: session.authMode,
+    token_expiry: session.tokenExpiry,
+    source: "5Paisa Xstream V3 Holding API",
+    read_only: true,
+  };
+}
+
   server.registerTool(
     "fivepaisa_holdings",
     {
       description:
         "Return current 5Paisa long-term equity holdings with quantity, average rate, current price, investment value, current value and P&L. Automatically uses the active 5Paisa session. Read-only.",
     },
-    async () => {
-      requireFivePaisaConfig(env);
-      const session = await ensureFivePaisaSession(env, baseUrl);
-      if (!session.accessToken || !session.clientCode) {
-        throw new Error("5Paisa authentication is required before holdings can be read.");
-      }
-
-      const response = await fivePaisaPost(env, "/V3/Holding", {});
-      const rows = Array.isArray(response?.body?.Data) ? response.body.Data : [];
-      const normalized = rows.map((row: any) => {
-        const quantity = Number(row?.Quantity ?? 0);
-        const average = Number(row?.AvgRate);
-        const ltp = Number(row?.CurrentPrice);
-        const investmentValue = Number.isFinite(average) ? average * quantity : null;
-        const currentValue = Number.isFinite(ltp) ? ltp * quantity : null;
-        const pnl = investmentValue !== null && currentValue !== null
-          ? currentValue - investmentValue : null;
-        const pnlPercent = pnl !== null && investmentValue
-          ? (pnl / investmentValue) * 100 : null;
-
-        return {
-          symbol: row?.Symbol ?? null,
-          exchange: row?.Exch === "N" ? "NSE" : row?.Exch ?? null,
-          isin: row?.ISIN ?? null,
-          quantity,
-          average_price: Number.isFinite(average) ? average : null,
-          ltp: Number.isFinite(ltp) ? ltp : null,
-          investment_value: investmentValue,
-          current_value: currentValue,
-          pnl,
-          pnl_percent: pnlPercent,
-          dp_quantity: Number(row?.DPQty ?? 0),
-          mtf_quantity: Number(row?.MTFQty ?? 0),
-          mtf_pledge: Number(row?.MTFPledge ?? 0),
-          pool_quantity: Number(row?.PoolQty ?? 0),
-          e_dis_authorized: row?.POASigned ?? null,
-        };
-      });
-
-      const summary = normalized.reduce(
-        (s: any, row: any) => {
-          if (Number.isFinite(row.investment_value)) s.investment_value += row.investment_value;
-          if (Number.isFinite(row.current_value)) s.current_value += row.current_value;
-          return s;
-        },
-        { investment_value: 0, current_value: 0 }
-      );
-      summary.pnl = summary.current_value - summary.investment_value;
-      summary.pnl_percent = summary.investment_value
-        ? (summary.pnl / summary.investment_value) * 100
-        : null;
-
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            authenticated: true,
-            broker: "5Paisa",
-            holdings: normalized,
-            summary,
-            auth_mode: session.authMode,
-            token_expiry: session.tokenExpiry,
-            source: "5Paisa Xstream V3 Holding API",
-            read_only: true,
-          }, null, 2)
-        }]
-      };
-    }
+    async () => ({
+      content: [{
+        type: "text",
+        text: JSON.stringify(await getFivePaisaHoldings(env, baseUrl), null, 2)
+      }]
+    })
   );
 
   server.registerTool(
