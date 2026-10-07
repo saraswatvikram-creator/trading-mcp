@@ -1,8 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/server";
-import { registerAngelOneTools } from "./angelone";
-import { registerGrowwTools } from "./groww";
-import { registerMStockTools } from "./mstock";
-import { registerFivePaisaTools, handleFivePaisaCallback } from "./fivepaisa";
+import { registerAngelOneTools, getAngelOneHoldings } from "./angelone";
+import { registerGrowwTools, getGrowwHoldings } from "./groww";
+import { registerMStockTools, getMStockHoldings } from "./mstock";
+import { registerFivePaisaTools, handleFivePaisaCallback, getFivePaisaHoldings } from "./fivepaisa";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 
