@@ -753,6 +753,13 @@ function App() {
           </div>
           <div className="flex items-center gap-3">
             <ConnectionIndicator status={status} />
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => { window.location.href = "/investments"; }}
+            >
+              Investments
+            </Button>
             <ModeToggle />
             {status === "disconnected" && (
               <Button
