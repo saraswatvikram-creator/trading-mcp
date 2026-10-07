@@ -242,6 +242,7 @@ function ModeToggle() {
 
 type InvestmentHolding = {
   broker: string;
+  asset_class: string;
   symbol: string | null;
   exchange: string | null;
   isin: string | null;
@@ -341,6 +342,7 @@ function InvestmentsDashboard() {
                 : investment !== null && current !== null ? current - investment : null;
               return {
                 broker,
+                asset_class: "Equity",
                 symbol: r?.tradingsymbol ?? null,
                 exchange: r?.exchange ?? null,
                 isin: r?.isin ?? null,
@@ -353,13 +355,53 @@ function InvestmentsDashboard() {
                 pnl_percent: investment ? ((pnl ?? 0) / investment) * 100 : null
               };
             });
+            // Zerodha Coin mutual funds are exposed by a separate Kite API.
+            const mfRes = await mcpFetch(
+              "/mcp",
+              "tools/call",
+              { name: "zerodha_mf_holdings", arguments: {} },
+              sessionId
+            );
+            const mfResult = mfRes.data?.result as
+              | { content?: Array<{ type: string; text?: string }>; isError?: boolean }
+              | undefined;
+            const mfText = mfResult?.content?.[0]?.text ?? "";
+            if (!mfText || mfResult?.isError) throw new Error(mfText || "Mutual fund tool call failed.");
+            const mfRaw = JSON.parse(mfText);
+            if (!Array.isArray(mfRaw?.data)) throw new Error(mfRaw?.message || "Mutual fund holdings unavailable.");
+            const mfHoldings: InvestmentHolding[] = mfRaw.data.map((r: any) => ({
+              broker,
+              asset_class: "Mutual Fund",
+              symbol: r?.fund ?? r?.symbol ?? null,
+              exchange: null,
+              isin: r?.isin ?? r?.symbol ?? null,
+              quantity: Number(r?.quantity ?? 0),
+              average_price: Number.isFinite(Number(r?.average_price)) ? Number(r.average_price) : null,
+              ltp: Number.isFinite(Number(r?.ltp)) ? Number(r.ltp) : null,
+              investment_value: Number.isFinite(Number(r?.investment_value)) ? Number(r.investment_value) : null,
+              current_value: Number.isFinite(Number(r?.current_value)) ? Number(r.current_value) : null,
+              pnl: Number.isFinite(Number(r?.pnl)) ? Number(r.pnl) : null,
+              pnl_percent: Number.isFinite(Number(r?.pnl_percent)) ? Number(r.pnl_percent) : null
+            }));
+            holdings = holdings.concat(mfHoldings);
+
+            const investment = holdings.reduce((s, r) => s + (r.investment_value ?? 0), 0);
+            const current = holdings.reduce((s, r) => s + (r.current_value ?? 0), 0);
+            const pnlValue = current - investment;
+            summary = {
+              investment_value: investment,
+              current_value: current,
+              pnl: pnlValue,
+              pnl_percent: investment ? (pnlValue / investment) * 100 : null
+            };
           } else {
             if (!Array.isArray(raw?.holdings)) {
               throw new Error(raw?.message || raw?.reason || "Holdings unavailable; broker authentication is required.");
             }
             holdings = raw.holdings.map((r: any) => ({
               ...r,
-              broker
+              broker,
+              asset_class: r?.asset_class ?? "Equity"
             }));
             summary = {
               investment_value: Number(raw?.summary?.investment_value ?? 0),
@@ -436,7 +478,7 @@ function InvestmentsDashboard() {
           <div>
             <h1 className="text-xl font-semibold">Investments Dashboard</h1>
             <p className="text-xs text-kumo-subtle mt-1">
-              Equity holdings only. Separate from the F&O Trading Desk and Historical P&L.
+              Stocks, ETFs and Mutual Funds. Separate from the F&O Trading Desk and Historical P&L.
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -564,7 +606,8 @@ function InvestmentsDashboard() {
                   <thead className="bg-kumo-elevated">
                     <tr>
                       <th className="text-left p-3">Broker</th>
-                      <th className="text-left p-3">Symbol</th>
+                      <th className="text-left p-3">Asset Class</th>
+                      <th className="text-left p-3">Symbol / Fund</th>
                       <th className="text-left p-3">ISIN</th>
                       <th className="text-right p-3">Qty</th>
                       <th className="text-right p-3">Avg Price</th>
@@ -579,6 +622,7 @@ function InvestmentsDashboard() {
                     {allHoldings.map((h, i) => (
                       <tr key={h.broker + "-" + h.symbol + "-" + i} className="border-t border-kumo-line">
                         <td className="p-3">{h.broker}</td>
+                        <td className="p-3">{h.asset_class}</td>
                         <td className="p-3 font-medium">{h.symbol ?? "—"}</td>
                         <td className="p-3 text-xs">{h.isin ?? "—"}</td>
                         <td className="p-3 text-right">{h.quantity.toLocaleString("en-IN")}</td>
