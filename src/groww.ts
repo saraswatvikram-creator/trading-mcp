@@ -350,12 +350,13 @@ async function withGrowwToken(
 async function growwGetWithAutoRefresh(
   path: string,
   env: GrowwEnv
-): Promise<{ data: any; expiry: string | null }> {
+): Promise<{ data: any; accessToken: string; expiry: string | null }> {
   let token = await withGrowwToken(env);
 
   try {
     return {
       data: await growwGet(path, env, token.accessToken),
+      accessToken: token.accessToken,
       expiry: token.expiry,
     };
   } catch (error) {
@@ -370,6 +371,7 @@ async function growwGetWithAutoRefresh(
 
     return {
       data: await growwGet(path, env, token.accessToken),
+      accessToken: token.accessToken,
       expiry: token.expiry,
     };
   }
@@ -497,7 +499,7 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
         "/v1/positions/user?segment=FNO",
         env
       );
-      const token = { expiry: result.expiry };
+      const token = result;
       const response = result.data;
       const positions = response?.payload?.positions ?? response?.payload ?? [];
       const openPositions = positions.filter(
@@ -543,7 +545,7 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
         "/v1/margins/detail/user",
         env
       );
-      const token = { expiry: result.expiry };
+      const token = result;
       const margin = result.data;
 
       return {
@@ -571,7 +573,7 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
         "/v1/order/list?segment=FNO&page=0&page_size=100",
         env
       );
-      const token = { expiry: result.expiry };
+      const token = result;
       const orders = result.data;
 
       return {
@@ -607,8 +609,7 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
           ),
         ]);
 
-      const token = { expiry: profileResult.expiry };
-      const profileResponse = profileResult.data;
+      const token = profileResult; const profileResponse = profileResult.data;
       const positionResponse = positionResult.data;
       const marginResponse = marginResult.data;
       const orderResponse = orderResult.data;
