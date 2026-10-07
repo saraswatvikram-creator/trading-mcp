@@ -419,7 +419,7 @@ function dashboardSummary(
   ].join("\n");
 }
 
-export export async function getGrowwHoldings(env: GrowwEnv): Promise<any> {
+export async function getGrowwHoldings(env: GrowwEnv): Promise<any> {
   const result = await growwGetWithAutoRefresh("/v1/holdings/user", env);
   const token = result;
   const response = result.data;
