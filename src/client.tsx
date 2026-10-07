@@ -354,7 +354,10 @@ function InvestmentsDashboard() {
               };
             });
           } else {
-            holdings = (Array.isArray(raw?.holdings) ? raw.holdings : []).map((r: any) => ({
+            if (!Array.isArray(raw?.holdings)) {
+              throw new Error(raw?.message || raw?.reason || "Holdings unavailable; broker authentication is required.");
+            }
+            holdings = raw.holdings.map((r: any) => ({
               ...r,
               broker
             }));
