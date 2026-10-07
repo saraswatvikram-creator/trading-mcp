@@ -162,7 +162,7 @@ export async function getAngelOneHoldings(env: AngelOneEnv): Promise<any> {
 }
 
 
-function registerAngelOneTools(server: any, env: AngelOneEnv): void {
+export function registerAngelOneTools(server: any, env: AngelOneEnv): void {
 
   server.registerTool(
     "angelone_auth_status",
