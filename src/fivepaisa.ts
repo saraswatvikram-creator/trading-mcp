@@ -579,7 +579,7 @@ export async function getFivePaisaHoldings(env: FivePaisaEnv, baseUrl: string): 
 }
 
 
-function registerFivePaisaTools(
+export function registerFivePaisaTools(
   server: any,
   env: FivePaisaEnv,
   baseUrl: string
