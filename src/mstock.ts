@@ -374,7 +374,7 @@ export async function getMStockHoldings(env: MStockEnv, totp?: string): Promise<
 }
 
 
-function registerMStockTools(server: any, env: MStockEnv): void {
+export function registerMStockTools(server: any, env: MStockEnv): void {
   server.registerTool(
     "mstock_auth_status",
     {
