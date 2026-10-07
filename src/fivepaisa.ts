@@ -514,63 +514,7 @@ function dashboardTable(
   ].join("\n");
 }
 
-export function registerFivePaisaTools(
-  server: any,
-  env: FivePaisaEnv,
-  baseUrl: string
-): void {
-  server.registerTool(
-    "fivepaisa_auth_status",
-    {
-      description:
-        "Check 5Paisa Xstream API configuration and current session state. Read-only; never exposes credentials or access tokens.",
-    },
-    async () => {
-      const configured =
-        Boolean(env.FIVEPAISA_API_KEY) &&
-        Boolean(env.FIVEPAISA_ENCRYPTION_KEY) &&
-        Boolean(env.FIVEPAISA_USER_ID);
-
-      let session = {
-        accessToken: null as string | null,
-        clientCode: null as string | null,
-        loginTime: null as string | null,
-        tokenExpiry: null as string | null,
-      };
-
-      if (configured) {
-        session = await getStoredFivePaisaSession(env);
-      }
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(
-              {
-                configured,
-                authenticated: Boolean(session.accessToken),
-                client_code: session.clientCode,
-                login_time: session.loginTime,
-                token_expiry: session.tokenExpiry,
-                auto_totp_ready: hasFivePaisaTotpConfig(env),
-                auth_mode: session.accessToken
-                  ? "ACTIVE"
-                  : hasFivePaisaTotpConfig(env)
-                    ? "AUTO_TOTP_READY"
-                    : "OAUTH_REQUIRED",
-                read_only: true,
-              },
-              null,
-              2
-            ),
-          },
-        ],
-      };
-    }
-  );
-
-export async function getFivePaisaHoldings(env: FivePaisaEnv, baseUrl: string): Promise<any> {
+export export async function getFivePaisaHoldings(env: FivePaisaEnv, baseUrl: string): Promise<any> {
   requireFivePaisaConfig(env);
   const session = await ensureFivePaisaSession(env, baseUrl);
   if (!session.accessToken || !session.clientCode) {
@@ -633,6 +577,63 @@ export async function getFivePaisaHoldings(env: FivePaisaEnv, baseUrl: string): 
     read_only: true,
   };
 }
+
+
+function registerFivePaisaTools(
+  server: any,
+  env: FivePaisaEnv,
+  baseUrl: string
+): void {
+  server.registerTool(
+    "fivepaisa_auth_status",
+    {
+      description:
+        "Check 5Paisa Xstream API configuration and current session state. Read-only; never exposes credentials or access tokens.",
+    },
+    async () => {
+      const configured =
+        Boolean(env.FIVEPAISA_API_KEY) &&
+        Boolean(env.FIVEPAISA_ENCRYPTION_KEY) &&
+        Boolean(env.FIVEPAISA_USER_ID);
+
+      let session = {
+        accessToken: null as string | null,
+        clientCode: null as string | null,
+        loginTime: null as string | null,
+        tokenExpiry: null as string | null,
+      };
+
+      if (configured) {
+        session = await getStoredFivePaisaSession(env);
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                configured,
+                authenticated: Boolean(session.accessToken),
+                client_code: session.clientCode,
+                login_time: session.loginTime,
+                token_expiry: session.tokenExpiry,
+                auto_totp_ready: hasFivePaisaTotpConfig(env),
+                auth_mode: session.accessToken
+                  ? "ACTIVE"
+                  : hasFivePaisaTotpConfig(env)
+                    ? "AUTO_TOTP_READY"
+                    : "OAUTH_REQUIRED",
+                read_only: true,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
 
   server.registerTool(
     "fivepaisa_holdings",
