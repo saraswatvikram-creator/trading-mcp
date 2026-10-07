@@ -596,19 +596,22 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
         "Return a consolidated, read-only Groww dashboard with automatic TOTP authentication, user profile, F&O positions, live LTP-based MTM, available margin and today's F&O orders. Never place, modify, cancel or square off orders.",
     },
     async () => {
-      const token = await withGrowwToken(env);
-
-      const [profileResponse, positionResponse, marginResponse, orderResponse] =
+      const [profileResult, positionResult, marginResult, orderResult] =
         await Promise.all([
-          growwGet("/v1/user/detail", env, token.accessToken),
-          growwGet("/v1/positions/user?segment=FNO", env, token.accessToken),
-          growwGet("/v1/margins/detail/user", env, token.accessToken),
-          growwGet(
+          growwGetWithAutoRefresh("/v1/user/detail", env),
+          growwGetWithAutoRefresh("/v1/positions/user?segment=FNO", env),
+          growwGetWithAutoRefresh("/v1/margins/detail/user", env),
+          growwGetWithAutoRefresh(
             "/v1/order/list?segment=FNO&page=0&page_size=100",
-            env,
-            token.accessToken
+            env
           ),
         ]);
+
+      const token = { expiry: profileResult.expiry };
+      const profileResponse = profileResult.data;
+      const positionResponse = positionResult.data;
+      const marginResponse = marginResult.data;
+      const orderResponse = orderResult.data;
 
       const profile = profileResponse?.payload ?? profileResponse;
       const positions = positionResponse?.payload?.positions ?? [];
@@ -691,42 +694,33 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
         };
       }
 
-      let accessToken: string;
       try {
-        const token = await withGrowwToken(env);
-        accessToken = token.accessToken;
+        const authResult = await growwGetWithAutoRefresh(
+          "/v1/user/detail",
+          env
+        );
         checks.authentication = "PASS";
+        checks.profile = "PASS";
+
+        const tests: Array<[string, string]> = [
+          ["positions", "/v1/positions/user?segment=FNO"],
+          ["margin", "/v1/margins/detail/user"],
+          ["orders", "/v1/order/list?segment=FNO&page=0&page_size=100"],
+        ];
+
+        for (const [name, path] of tests) {
+          try {
+            await growwGetWithAutoRefresh(path, env);
+            checks[name] = "PASS";
+          } catch (e) {
+            checks[name] = "FAIL";
+            errors[name] = e instanceof Error ? e.message : String(e);
+          }
+        }
       } catch (e) {
         checks.authentication = "FAIL";
+        checks.profile = "FAIL";
         errors.authentication = e instanceof Error ? e.message : String(e);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify({
-              status: "FAIL",
-              checks,
-              errors,
-              read_only: true,
-            }, null, 2),
-          }],
-        };
-      }
-
-      const tests: Array<[string, string]> = [
-        ["profile", "/v1/user/detail"],
-        ["positions", "/v1/positions/user?segment=FNO"],
-        ["margin", "/v1/margins/detail/user"],
-        ["orders", "/v1/order/list?segment=FNO&page=0&page_size=100"],
-      ];
-
-      for (const [name, path] of tests) {
-        try {
-          await growwGet(path, env, accessToken);
-          checks[name] = "PASS";
-        } catch (e) {
-          checks[name] = "FAIL";
-          errors[name] = e instanceof Error ? e.message : String(e);
-        }
       }
 
       const passed = Object.values(checks).filter((v) => v === "PASS").length;
