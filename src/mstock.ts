@@ -306,7 +306,7 @@ function result(payload: any) {
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
 }
 
-export export async function getMStockHoldings(env: MStockEnv, totp?: string): Promise<any> {
+export async function getMStockHoldings(env: MStockEnv, totp?: string): Promise<any> {
   const r = await liveOrTotp(env, totp);
   if (!r.live) return r.auth;
 
