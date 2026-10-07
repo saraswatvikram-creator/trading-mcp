@@ -476,7 +476,7 @@ function InvestmentsDashboard() {
             <div className="flex flex-wrap gap-6">
               {brokers.map(b => (
                 <div key={b.broker} className="flex items-center gap-2">
-                  <span className={\`size-2.5 rounded-full \${b.status === "connected" ? "bg-green-500" : "bg-red-500"}\`} />
+                  <span className={`size-2.5 rounded-full ${b.status === "connected" ? "bg-green-500" : "bg-red-500"}`} />
                   <span className="text-sm">{b.broker}</span>
                 </div>
               ))}
@@ -497,13 +497,13 @@ function InvestmentsDashboard() {
             </Surface>
             <Surface className="p-4 rounded-xl ring ring-kumo-line">
               <Text size="xs" variant="secondary">Unrealised P&L</Text>
-              <div className={\`text-lg font-semibold mt-1 \${totals.pnl >= 0 ? "text-green-600" : "text-red-600"}\`}>
+              <div className={`text-lg font-semibold mt-1 ${totals.pnl >= 0 ? "text-green-600" : "text-red-600"}`}>
                 {money(totals.pnl)}
               </div>
             </Surface>
             <Surface className="p-4 rounded-xl ring ring-kumo-line">
               <Text size="xs" variant="secondary">P&L %</Text>
-              <div className={\`text-lg font-semibold mt-1 \${(totalPct ?? 0) >= 0 ? "text-green-600" : "text-red-600"}\`}>
+              <div className={`text-lg font-semibold mt-1 ${(totalPct ?? 0) >= 0 ? "text-green-600" : "text-red-600"}`}>
                 {pct(totalPct)}
               </div>
             </Surface>
@@ -530,10 +530,10 @@ function InvestmentsDashboard() {
                       <td className="p-3 font-medium">{b.broker}</td>
                       <td className="p-3 text-right">{b.status === "connected" ? money(b.investment_value) : "—"}</td>
                       <td className="p-3 text-right">{b.status === "connected" ? money(b.current_value) : "—"}</td>
-                      <td className={\`p-3 text-right \${b.pnl >= 0 ? "text-green-600" : "text-red-600"}\`}>
+                      <td className={`p-3 text-right ${b.pnl >= 0 ? "text-green-600" : "text-red-600"}`}>
                         {b.status === "connected" ? money(b.pnl) : "—"}
                       </td>
-                      <td className={\`p-3 text-right \${(b.pnl_percent ?? 0) >= 0 ? "text-green-600" : "text-red-600"}\`}>
+                      <td className={`p-3 text-right ${(b.pnl_percent ?? 0) >= 0 ? "text-green-600" : "text-red-600"}`}>
                         {b.status === "connected" ? pct(b.pnl_percent) : "—"}
                       </td>
                     </tr>
@@ -542,8 +542,8 @@ function InvestmentsDashboard() {
                     <td className="p-3">TOTAL</td>
                     <td className="p-3 text-right">{money(totals.investment)}</td>
                     <td className="p-3 text-right">{money(totals.current)}</td>
-                    <td className={\`p-3 text-right \${totals.pnl >= 0 ? "text-green-600" : "text-red-600"}\`}>{money(totals.pnl)}</td>
-                    <td className={\`p-3 text-right \${(totalPct ?? 0) >= 0 ? "text-green-600" : "text-red-600"}\`}>{pct(totalPct)}</td>
+                    <td className={`p-3 text-right ${totals.pnl >= 0 ? "text-green-600" : "text-red-600"}`}>{money(totals.pnl)}</td>
+                    <td className={`p-3 text-right ${(totalPct ?? 0) >= 0 ? "text-green-600" : "text-red-600"}`}>{pct(totalPct)}</td>
                   </tr>
                 </tbody>
               </table>
@@ -586,8 +586,8 @@ function InvestmentsDashboard() {
                         <td className="p-3 text-right">{money(h.ltp)}</td>
                         <td className="p-3 text-right">{money(h.investment_value)}</td>
                         <td className="p-3 text-right">{money(h.current_value)}</td>
-                        <td className={\`p-3 text-right \${(h.pnl ?? 0) >= 0 ? "text-green-600" : "text-red-600"}\`}>{money(h.pnl)}</td>
-                        <td className={\`p-3 text-right \${(h.pnl_percent ?? 0) >= 0 ? "text-green-600" : "text-red-600"}\`}>{pct(h.pnl_percent)}</td>
+                        <td className={`p-3 text-right ${(h.pnl ?? 0) >= 0 ? "text-green-600" : "text-red-600"}`}>{money(h.pnl)}</td>
+                        <td className={`p-3 text-right ${(h.pnl_percent ?? 0) >= 0 ? "text-green-600" : "text-red-600"}`}>{pct(h.pnl_percent)}</td>
                       </tr>
                     ))}
                   </tbody>
