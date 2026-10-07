@@ -356,6 +356,83 @@ export function registerMStockTools(server: any, env: MStockEnv): void {
   );
 
   server.registerTool(
+    "mstock_holdings",
+    {
+      description:
+        "Return current m.Stock Type A long-term equity holdings. If the access token is missing or expired, automatically generate TOTP and authenticate. Read-only.",
+      inputSchema: { totp: z.string().regex(/^\\d{6}$/).optional() },
+    },
+    async ({ totp }) => {
+      const r = await liveOrTotp(env, totp);
+      if (!r.live) return result(r.auth);
+
+      const { apiKey } = config(env);
+      const token = await storedToken(env);
+      if (!token) throw new Error("MSTOCK_AUTH_REQUIRED: No m.Stock access token is stored.");
+
+      const response = await get("/openapi/typea/portfolio/holdings", apiKey, token);
+      const rows = Array.isArray(response?.data) ? response.data : [];
+      const normalized = rows.map((row: any) => {
+        const quantity = Number(row?.quantity ?? 0);
+        const average = Number(row?.average_price);
+        const ltp = Number(row?.last_price);
+        const investmentValue = Number.isFinite(average) ? average * quantity : null;
+        const currentValue = Number.isFinite(ltp) ? ltp * quantity : null;
+        const brokerPnl = Number(row?.pnl);
+        const pnl = Number.isFinite(brokerPnl) && brokerPnl !== 0
+          ? brokerPnl
+          : investmentValue !== null && currentValue !== null
+            ? currentValue - investmentValue : null;
+        const pnlPercent = pnl !== null && investmentValue
+          ? (pnl / investmentValue) * 100 : null;
+
+        return {
+          symbol: row?.tradingsymbol ?? null,
+          exchange: row?.exchange ?? null,
+          isin: row?.isin ?? null,
+          instrument_token: row?.instrument_token ?? null,
+          quantity,
+          average_price: Number.isFinite(average) ? average : null,
+          ltp: Number.isFinite(ltp) ? ltp : null,
+          investment_value: investmentValue,
+          current_value: currentValue,
+          pnl,
+          pnl_percent: Number.isFinite(Number(row?.day_change_percentage))
+            ? Number(row.day_change_percentage)
+            : pnlPercent,
+          used_quantity: Number(row?.used_quantity ?? 0),
+          t1_quantity: Number(row?.t1_quantity ?? 0),
+          collateral_quantity: Number(row?.collateral_quantity ?? 0),
+        };
+      });
+
+      const summary = normalized.reduce(
+        (s: any, row: any) => {
+          if (Number.isFinite(row.investment_value)) s.investment_value += row.investment_value;
+          if (Number.isFinite(row.current_value)) s.current_value += row.current_value;
+          return s;
+        },
+        { investment_value: 0, current_value: 0 }
+      );
+      summary.pnl = summary.current_value - summary.investment_value;
+      summary.pnl_percent = summary.investment_value
+        ? (summary.pnl / summary.investment_value) * 100
+        : null;
+
+      return result({
+        status: "LIVE",
+        broker: "m.Stock",
+        auth_mode: "TYPE_A_TOTP",
+        holdings: normalized,
+        summary,
+        token_expiry: r.data.tokenExpiry,
+        source: "m.Stock Type A /openapi/typea/portfolio/holdings",
+        read_only: true,
+      });
+    }
+  );
+
+  server.registerTool(
     "mstock_positions",
     {
       description: "Return live m.Stock Type A F&O/net positions. If the access token is missing or expired, automatically generate TOTP from MSTOCK_TOTP_SECRET, authenticate and return live positions. Read-only.",
