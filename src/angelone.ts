@@ -124,7 +124,45 @@ async function angelOneGet(url: string, env: AngelOneEnv, jwtToken: string): Pro
   return data;
 }
 
-export function registerAngelOneTools(server: any, env: AngelOneEnv): void {
+export export async function getAngelOneHoldings(env: AngelOneEnv): Promise<any> {
+  const login = await angelOneLogin(env);
+  const holdings = await angelOneGet(ANGELONE_ALL_HOLDING_URL, env, login.jwtToken);
+  const data = holdings?.data ?? {};
+  const rows = Array.isArray(data?.holdings) ? data.holdings : [];
+  const total = data?.totalholding ?? {};
+
+  return {
+    authenticated: true,
+    broker: "Angel One",
+    holdings: rows.map((row: any) => ({
+      symbol: row?.tradingsymbol ?? null,
+      exchange: row?.exchange ?? null,
+      isin: row?.isin ?? null,
+      quantity: Number(row?.quantity ?? 0),
+      average_price: Number.isFinite(Number(row?.averageprice)) ? Number(row.averageprice) : null,
+      ltp: Number.isFinite(Number(row?.ltp)) ? Number(row.ltp) : null,
+      investment_value: Number.isFinite(Number(row?.averageprice)) && Number.isFinite(Number(row?.quantity))
+        ? Number(row.averageprice) * Number(row.quantity) : null,
+      current_value: Number.isFinite(Number(row?.ltp)) && Number.isFinite(Number(row?.quantity))
+        ? Number(row.ltp) * Number(row.quantity) : null,
+      pnl: Number.isFinite(Number(row?.profitandloss)) ? Number(row.profitandloss) : null,
+      pnl_percent: Number.isFinite(Number(row?.pnlpercentage)) ? Number(row.pnlpercentage) : null,
+      t1_quantity: Number(row?.t1quantity ?? 0),
+      collateral_quantity: Number(row?.collateralquantity ?? 0),
+    })),
+    summary: {
+      investment_value: Number.isFinite(Number(total?.totalinvvalue)) ? Number(total.totalinvvalue) : null,
+      current_value: Number.isFinite(Number(total?.totalholdingvalue)) ? Number(total.totalholdingvalue) : null,
+      pnl: Number.isFinite(Number(total?.totalprofitandloss)) ? Number(total.totalprofitandloss) : null,
+      pnl_percent: Number.isFinite(Number(total?.totalpnlpercentage)) ? Number(total.totalpnlpercentage) : null,
+    },
+    source: "Angel One SmartAPI getAllHolding",
+    read_only: true,
+  };
+}
+
+
+function registerAngelOneTools(server: any, env: AngelOneEnv): void {
 
   server.registerTool(
     "angelone_auth_status",
@@ -162,43 +200,6 @@ export function registerAngelOneTools(server: any, env: AngelOneEnv): void {
       };
     }
   );
-
-export async function getAngelOneHoldings(env: AngelOneEnv): Promise<any> {
-  const login = await angelOneLogin(env);
-  const holdings = await angelOneGet(ANGELONE_ALL_HOLDING_URL, env, login.jwtToken);
-  const data = holdings?.data ?? {};
-  const rows = Array.isArray(data?.holdings) ? data.holdings : [];
-  const total = data?.totalholding ?? {};
-
-  return {
-    authenticated: true,
-    broker: "Angel One",
-    holdings: rows.map((row: any) => ({
-      symbol: row?.tradingsymbol ?? null,
-      exchange: row?.exchange ?? null,
-      isin: row?.isin ?? null,
-      quantity: Number(row?.quantity ?? 0),
-      average_price: Number.isFinite(Number(row?.averageprice)) ? Number(row.averageprice) : null,
-      ltp: Number.isFinite(Number(row?.ltp)) ? Number(row.ltp) : null,
-      investment_value: Number.isFinite(Number(row?.averageprice)) && Number.isFinite(Number(row?.quantity))
-        ? Number(row.averageprice) * Number(row.quantity) : null,
-      current_value: Number.isFinite(Number(row?.ltp)) && Number.isFinite(Number(row?.quantity))
-        ? Number(row.ltp) * Number(row.quantity) : null,
-      pnl: Number.isFinite(Number(row?.profitandloss)) ? Number(row.profitandloss) : null,
-      pnl_percent: Number.isFinite(Number(row?.pnlpercentage)) ? Number(row.pnlpercentage) : null,
-      t1_quantity: Number(row?.t1quantity ?? 0),
-      collateral_quantity: Number(row?.collateralquantity ?? 0),
-    })),
-    summary: {
-      investment_value: Number.isFinite(Number(total?.totalinvvalue)) ? Number(total.totalinvvalue) : null,
-      current_value: Number.isFinite(Number(total?.totalholdingvalue)) ? Number(total.totalholdingvalue) : null,
-      pnl: Number.isFinite(Number(total?.totalprofitandloss)) ? Number(total.totalprofitandloss) : null,
-      pnl_percent: Number.isFinite(Number(total?.totalpnlpercentage)) ? Number(total.totalpnlpercentage) : null,
-    },
-    source: "Angel One SmartAPI getAllHolding",
-    read_only: true,
-  };
-}
 
   server.registerTool(
     "angelone_holdings",
