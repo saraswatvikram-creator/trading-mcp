@@ -514,7 +514,7 @@ function dashboardTable(
   ].join("\n");
 }
 
-export export async function getFivePaisaHoldings(env: FivePaisaEnv, baseUrl: string): Promise<any> {
+export async function getFivePaisaHoldings(env: FivePaisaEnv, baseUrl: string): Promise<any> {
   requireFivePaisaConfig(env);
   const session = await ensureFivePaisaSession(env, baseUrl);
   if (!session.accessToken || !session.clientCode) {
