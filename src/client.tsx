@@ -239,7 +239,369 @@ function ModeToggle() {
   );
 }
 
+
+type InvestmentHolding = {
+  broker: string;
+  symbol: string | null;
+  exchange: string | null;
+  isin: string | null;
+  quantity: number;
+  average_price: number | null;
+  ltp: number | null;
+  investment_value: number | null;
+  current_value: number | null;
+  pnl: number | null;
+  pnl_percent: number | null;
+};
+
+type InvestmentBroker = {
+  broker: string;
+  status: "connected" | "error";
+  message?: string;
+  investment_value: number;
+  current_value: number;
+  pnl: number;
+  pnl_percent: number | null;
+  holdings: InvestmentHolding[];
+};
+
+function money(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return "₹" + value.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+}
+
+function pct(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return value.toFixed(2) + "%";
+}
+
+function InvestmentsDashboard() {
+  const [brokers, setBrokers] = useState<InvestmentBroker[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+
+    const brokerTools = [
+      ["Zerodha", "zerodha_holdings"],
+      ["Angel One", "angelone_holdings"],
+      ["Groww", "groww_holdings"],
+      ["5Paisa", "fivepaisa_holdings"],
+      ["m.Stock", "mstock_holdings"]
+    ] as const;
+
+    try {
+      const init = await mcpFetch(
+        "/mcp",
+        "initialize",
+        {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "investments-dashboard", version: "1.0.0" }
+        },
+        null
+      );
+
+      const sessionId = init.sessionId;
+      await mcpFetch("/mcp", "notifications/initialized", {}, sessionId);
+
+      const rows: InvestmentBroker[] = [];
+
+      for (const [broker, tool] of brokerTools) {
+        try {
+          const res = await mcpFetch(
+            "/mcp",
+            "tools/call",
+            { name: tool, arguments: {} },
+            sessionId
+          );
+          const result = res.data?.result as
+            | { content?: Array<{ type: string; text?: string }>; isError?: boolean }
+            | undefined;
+          const rawText = result?.content?.[0]?.text ?? "";
+          if (!rawText || result?.isError) throw new Error(rawText || "Tool call failed.");
+
+          const raw = JSON.parse(rawText);
+          let holdings: InvestmentHolding[] = [];
+          let summary = { investment_value: 0, current_value: 0, pnl: 0, pnl_percent: null as number | null };
+
+          if (broker === "Zerodha") {
+            const data = Array.isArray(raw?.data) ? raw.data : [];
+            holdings = data.map((r: any) => {
+              const quantity = Number(r?.quantity ?? 0);
+              const average = Number(r?.average_price);
+              const ltp = Number(r?.last_price);
+              const investment = Number.isFinite(average) ? average * quantity : null;
+              const current = Number.isFinite(ltp) ? ltp * quantity : null;
+              const pnl = Number.isFinite(Number(r?.pnl))
+                ? Number(r.pnl)
+                : investment !== null && current !== null ? current - investment : null;
+              return {
+                broker,
+                symbol: r?.tradingsymbol ?? null,
+                exchange: r?.exchange ?? null,
+                isin: r?.isin ?? null,
+                quantity,
+                average_price: Number.isFinite(average) ? average : null,
+                ltp: Number.isFinite(ltp) ? ltp : null,
+                investment_value: investment,
+                current_value: current,
+                pnl,
+                pnl_percent: investment ? ((pnl ?? 0) / investment) * 100 : null
+              };
+            });
+          } else {
+            holdings = (Array.isArray(raw?.holdings) ? raw.holdings : []).map((r: any) => ({
+              ...r,
+              broker
+            }));
+            summary = {
+              investment_value: Number(raw?.summary?.investment_value ?? 0),
+              current_value: Number(raw?.summary?.current_value ?? 0),
+              pnl: Number(raw?.summary?.pnl ?? 0),
+              pnl_percent: Number.isFinite(Number(raw?.summary?.pnl_percent))
+                ? Number(raw.summary.pnl_percent)
+                : null
+            };
+          }
+
+          if (broker === "Zerodha") {
+            const investment = holdings.reduce((s, r) => s + (r.investment_value ?? 0), 0);
+            const current = holdings.reduce((s, r) => s + (r.current_value ?? 0), 0);
+            const pnlValue = current - investment;
+            summary = {
+              investment_value: investment,
+              current_value: current,
+              pnl: pnlValue,
+              pnl_percent: investment ? (pnlValue / investment) * 100 : null
+            };
+          }
+
+          rows.push({
+            broker,
+            status: "connected",
+            ...summary,
+            holdings
+          });
+        } catch (e) {
+          rows.push({
+            broker,
+            status: "error",
+            message: e instanceof Error ? e.message : String(e),
+            investment_value: 0,
+            current_value: 0,
+            pnl: 0,
+            pnl_percent: null,
+            holdings: []
+          });
+        }
+      }
+
+      setBrokers(rows);
+      setLastUpdated(new Date());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const totals = brokers.reduce(
+    (s, b) => ({
+      investment: s.investment + b.investment_value,
+      current: s.current + b.current_value,
+      pnl: s.pnl + b.pnl
+    }),
+    { investment: 0, current: 0, pnl: 0 }
+  );
+  const totalPct = totals.investment ? (totals.pnl / totals.investment) * 100 : null;
+  const allHoldings = brokers.flatMap(b => b.holdings).sort(
+    (a, b) => (b.current_value ?? 0) - (a.current_value ?? 0)
+  );
+
+  return (
+    <div className="min-h-screen bg-kumo-base text-kumo-default p-5">
+      <div className="max-w-6xl mx-auto space-y-5">
+        <header className="flex items-center justify-between border-b border-kumo-line pb-4">
+          <div>
+            <h1 className="text-xl font-semibold">Investments Dashboard</h1>
+            <p className="text-xs text-kumo-subtle mt-1">
+              Equity holdings only. Separate from the F&O Trading Desk and Historical P&L.
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            {lastUpdated && (
+              <span className="text-xs text-kumo-subtle">
+                Updated {lastUpdated.toLocaleTimeString()}
+              </span>
+            )}
+            <Button
+              variant="secondary"
+              size="sm"
+              loading={loading}
+              icon={<ArrowClockwiseIcon size={14} />}
+              onClick={load}
+            >
+              Refresh
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => { window.location.href = "/"; }}
+            >
+              Trading MCP
+            </Button>
+          </div>
+        </header>
+
+        {error && (
+          <Surface className="p-4 rounded-xl ring ring-red-500/30 bg-red-50 dark:bg-red-950/20">
+            <Text size="sm">{error}</Text>
+          </Surface>
+        )}
+
+        <section>
+          <Text size="base" bold>Authentication & Connection</Text>
+          <Surface className="p-4 mt-3 rounded-xl ring ring-kumo-line">
+            <div className="flex flex-wrap gap-6">
+              {brokers.map(b => (
+                <div key={b.broker} className="flex items-center gap-2">
+                  <span className={\`size-2.5 rounded-full \${b.status === "connected" ? "bg-green-500" : "bg-red-500"}\`} />
+                  <span className="text-sm">{b.broker}</span>
+                </div>
+              ))}
+            </div>
+          </Surface>
+        </section>
+
+        <section>
+          <Text size="base" bold>Portfolio Summary</Text>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">
+            <Surface className="p-4 rounded-xl ring ring-kumo-line">
+              <Text size="xs" variant="secondary">Investment Value</Text>
+              <div className="text-lg font-semibold mt-1">{money(totals.investment)}</div>
+            </Surface>
+            <Surface className="p-4 rounded-xl ring ring-kumo-line">
+              <Text size="xs" variant="secondary">Current Value</Text>
+              <div className="text-lg font-semibold mt-1">{money(totals.current)}</div>
+            </Surface>
+            <Surface className="p-4 rounded-xl ring ring-kumo-line">
+              <Text size="xs" variant="secondary">Unrealised P&L</Text>
+              <div className={\`text-lg font-semibold mt-1 \${totals.pnl >= 0 ? "text-green-600" : "text-red-600"}\`}>
+                {money(totals.pnl)}
+              </div>
+            </Surface>
+            <Surface className="p-4 rounded-xl ring ring-kumo-line">
+              <Text size="xs" variant="secondary">P&L %</Text>
+              <div className={\`text-lg font-semibold mt-1 \${(totalPct ?? 0) >= 0 ? "text-green-600" : "text-red-600"}\`}>
+                {pct(totalPct)}
+              </div>
+            </Surface>
+          </div>
+        </section>
+
+        <section>
+          <Text size="base" bold>Broker Summary</Text>
+          <Surface className="mt-3 rounded-xl ring ring-kumo-line overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-kumo-elevated">
+                  <tr>
+                    <th className="text-left p-3">Broker</th>
+                    <th className="text-right p-3">Investment Value</th>
+                    <th className="text-right p-3">Current Value</th>
+                    <th className="text-right p-3">P&L</th>
+                    <th className="text-right p-3">P&L %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {brokers.map(b => (
+                    <tr key={b.broker} className="border-t border-kumo-line">
+                      <td className="p-3 font-medium">{b.broker}</td>
+                      <td className="p-3 text-right">{b.status === "connected" ? money(b.investment_value) : "—"}</td>
+                      <td className="p-3 text-right">{b.status === "connected" ? money(b.current_value) : "—"}</td>
+                      <td className={\`p-3 text-right \${b.pnl >= 0 ? "text-green-600" : "text-red-600"}\`}>
+                        {b.status === "connected" ? money(b.pnl) : "—"}
+                      </td>
+                      <td className={\`p-3 text-right \${(b.pnl_percent ?? 0) >= 0 ? "text-green-600" : "text-red-600"}\`}>
+                        {b.status === "connected" ? pct(b.pnl_percent) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                  <tr className="border-t-2 border-kumo-line font-semibold">
+                    <td className="p-3">TOTAL</td>
+                    <td className="p-3 text-right">{money(totals.investment)}</td>
+                    <td className="p-3 text-right">{money(totals.current)}</td>
+                    <td className={\`p-3 text-right \${totals.pnl >= 0 ? "text-green-600" : "text-red-600"}\`}>{money(totals.pnl)}</td>
+                    <td className={\`p-3 text-right \${(totalPct ?? 0) >= 0 ? "text-green-600" : "text-red-600"}\`}>{pct(totalPct)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </Surface>
+        </section>
+
+        <section>
+          <Text size="base" bold>Holding Detail</Text>
+          <Surface className="mt-3 rounded-xl ring ring-kumo-line overflow-hidden">
+            {allHoldings.length === 0 ? (
+              <div className="p-6 text-sm text-kumo-subtle">
+                {loading ? "Loading holdings..." : "No holdings returned from connected brokers."}
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-kumo-elevated">
+                    <tr>
+                      <th className="text-left p-3">Broker</th>
+                      <th className="text-left p-3">Symbol</th>
+                      <th className="text-left p-3">ISIN</th>
+                      <th className="text-right p-3">Qty</th>
+                      <th className="text-right p-3">Avg Price</th>
+                      <th className="text-right p-3">LTP</th>
+                      <th className="text-right p-3">Investment</th>
+                      <th className="text-right p-3">Current Value</th>
+                      <th className="text-right p-3">P&L</th>
+                      <th className="text-right p-3">P&L %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {allHoldings.map((h, i) => (
+                      <tr key={h.broker + "-" + h.symbol + "-" + i} className="border-t border-kumo-line">
+                        <td className="p-3">{h.broker}</td>
+                        <td className="p-3 font-medium">{h.symbol ?? "—"}</td>
+                        <td className="p-3 text-xs">{h.isin ?? "—"}</td>
+                        <td className="p-3 text-right">{h.quantity.toLocaleString("en-IN")}</td>
+                        <td className="p-3 text-right">{money(h.average_price)}</td>
+                        <td className="p-3 text-right">{money(h.ltp)}</td>
+                        <td className="p-3 text-right">{money(h.investment_value)}</td>
+                        <td className="p-3 text-right">{money(h.current_value)}</td>
+                        <td className={\`p-3 text-right \${(h.pnl ?? 0) >= 0 ? "text-green-600" : "text-red-600"}\`}>{money(h.pnl)}</td>
+                        <td className={\`p-3 text-right \${(h.pnl_percent ?? 0) >= 0 ? "text-green-600" : "text-red-600"}\`}>{pct(h.pnl_percent)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Surface>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 function App() {
+  if (window.location.pathname === "/investments") {
+    return <InvestmentsDashboard />;
+  }
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
   const [tools, setTools] = useState<McpTool[]>([]);
