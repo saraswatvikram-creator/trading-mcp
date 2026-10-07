@@ -496,7 +496,7 @@ export async function getGrowwHoldings(env: GrowwEnv): Promise<any> {
 }
 
 
-function registerGrowwTools(server: any, env: GrowwEnv): void {
+export function registerGrowwTools(server: any, env: GrowwEnv): void {
   server.registerTool(
     "groww_auth_status",
     {
