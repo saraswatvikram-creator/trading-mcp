@@ -397,9 +397,7 @@ export function registerMStockTools(server: any, env: MStockEnv): void {
           investment_value: investmentValue,
           current_value: currentValue,
           pnl,
-          pnl_percent: Number.isFinite(Number(row?.day_change_percentage))
-            ? Number(row.day_change_percentage)
-            : pnlPercent,
+          pnl_percent: pnlPercent,
           used_quantity: Number(row?.used_quantity ?? 0),
           t1_quantity: Number(row?.t1_quantity ?? 0),
           collateral_quantity: Number(row?.collateral_quantity ?? 0),
