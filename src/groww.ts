@@ -489,6 +489,94 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
   );
 
   server.registerTool(
+    "groww_holdings",
+    {
+      description:
+        "Authenticate to Groww using TOTP and return current long-term equity holdings with live CASH LTP, investment value, current value and calculated P&L. Read-only.",
+    },
+    async () => {
+      const result = await growwGetWithAutoRefresh("/v1/holdings/user", env);
+      const token = result;
+      const response = result.data;
+      const holdings = response?.payload?.holdings ?? response?.payload ?? [];
+      const symbols = holdings
+        .map((row: any) => "NSE_" + String(row?.trading_symbol ?? ""))
+        .filter((symbol: string) => symbol !== "NSE_");
+
+      const ltps: Record<string, number> = {};
+      for (let i = 0; i < symbols.length; i += 50) {
+        const chunk = symbols.slice(i, i + 50);
+        const params = new URLSearchParams({
+          segment: "CASH",
+          exchange_symbols: chunk.join(","),
+        });
+        const ltpResponse = await growwGetWithAutoRefresh(
+          "/v1/live-data/ltp?" + params.toString(),
+          env
+        );
+        Object.assign(ltps, ltpResponse.data?.payload ?? {});
+      }
+
+      const normalized = holdings.map((row: any) => {
+        const quantity = Number(row?.quantity ?? 0);
+        const average = Number(row?.average_price);
+        const symbol = String(row?.trading_symbol ?? "");
+        const ltp = Number(ltps["NSE_" + symbol]);
+        const investmentValue = Number.isFinite(average) ? average * quantity : null;
+        const currentValue = Number.isFinite(ltp) ? ltp * quantity : null;
+        const pnl = investmentValue !== null && currentValue !== null
+          ? currentValue - investmentValue : null;
+        const pnlPercent = pnl !== null && investmentValue
+          ? (pnl / investmentValue) * 100 : null;
+
+        return {
+          symbol,
+          exchange: "NSE",
+          isin: row?.isin ?? null,
+          quantity,
+          average_price: Number.isFinite(average) ? average : null,
+          ltp: Number.isFinite(ltp) ? ltp : null,
+          investment_value: investmentValue,
+          current_value: currentValue,
+          pnl,
+          pnl_percent: pnlPercent,
+          pledge_quantity: Number(row?.pledge_quantity ?? 0),
+          t1_quantity: Number(row?.t1_quantity ?? 0),
+          demat_free_quantity: Number(row?.demat_free_quantity ?? 0),
+        };
+      });
+
+      const summary = normalized.reduce(
+        (s: any, row: any) => {
+          if (Number.isFinite(row.investment_value)) s.investment_value += row.investment_value;
+          if (Number.isFinite(row.current_value)) s.current_value += row.current_value;
+          return s;
+        },
+        { investment_value: 0, current_value: 0 }
+      );
+      summary.pnl = summary.current_value - summary.investment_value;
+      summary.pnl_percent = summary.investment_value
+        ? (summary.pnl / summary.investment_value) * 100
+        : null;
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            authenticated: true,
+            broker: "Groww",
+            holdings: normalized,
+            summary,
+            token_expiry: token.expiry,
+            source: "Groww Holdings API + Live LTP API (CASH)",
+            read_only: true,
+          }, null, 2)
+        }]
+      };
+    }
+  );
+
+  server.registerTool(
     "groww_positions",
     {
       description:

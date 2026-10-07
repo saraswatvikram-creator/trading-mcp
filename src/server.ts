@@ -4307,6 +4307,102 @@ function createServer(
   );
 
   // ==========================================================
+  // MUTUAL FUND HOLDINGS (COIN)
+  // ==========================================================
+
+  server.registerTool(
+    "zerodha_mf_holdings",
+    {
+      description:
+        "Read current Zerodha Coin mutual fund holdings. Returns fund name, ISIN, folio, units, average NAV, latest available NAV, investment value and current value. Read-only.",
+    },
+
+    async () => {
+      const response = await zerodhaGet(
+        "/mf/holdings",
+        env
+      ) as any;
+
+      const data = Array.isArray(response?.data)
+        ? response.data
+        : [];
+
+      const holdings = data.map((r: any) => {
+        const quantity = Number(r?.quantity ?? 0);
+        const averagePrice = Number(r?.average_price);
+        const lastPrice = Number(r?.last_price);
+        const investmentValue = Number.isFinite(averagePrice)
+          ? averagePrice * quantity
+          : null;
+        const currentValue = Number.isFinite(lastPrice)
+          ? lastPrice * quantity
+          : null;
+        const pnl = Number.isFinite(Number(r?.pnl))
+          ? Number(r.pnl)
+          : investmentValue !== null && currentValue !== null
+            ? currentValue - investmentValue
+            : null;
+
+        return {
+          asset_class: "Mutual Fund",
+          fund: r?.fund ?? null,
+          symbol: r?.tradingsymbol ?? null,
+          isin: r?.tradingsymbol ?? null,
+          folio: r?.folio ?? null,
+          quantity,
+          average_price: Number.isFinite(averagePrice) ? averagePrice : null,
+          ltp: Number.isFinite(lastPrice) ? lastPrice : null,
+          last_price_date: r?.last_price_date ?? null,
+          pledged_quantity: Number(r?.pledged_quantity ?? 0),
+          investment_value: investmentValue,
+          current_value: currentValue,
+          pnl,
+          pnl_percent:
+            investmentValue && pnl !== null
+              ? (pnl / investmentValue) * 100
+              : null,
+        };
+      });
+
+      const investmentValue = holdings.reduce(
+        (sum: number, h: any) => sum + (h.investment_value ?? 0),
+        0
+      );
+      const currentValue = holdings.reduce(
+        (sum: number, h: any) => sum + (h.current_value ?? 0),
+        0
+      );
+      const pnl = currentValue - investmentValue;
+
+      return {
+        content: [
+          {
+            text: JSON.stringify(
+              {
+                status: response?.status ?? "success",
+                data: holdings,
+                summary: {
+                  investment_value: investmentValue,
+                  current_value: currentValue,
+                  pnl,
+                  pnl_percent: investmentValue
+                    ? (pnl / investmentValue) * 100
+                    : null,
+                  holding_count: holdings.length,
+                },
+                read_only: true,
+              },
+              null,
+              2
+            ),
+            type: "text",
+          },
+        ],
+      };
+    }
+  );
+
+  // ==========================================================
   // ORDERS
   // ==========================================================
 
