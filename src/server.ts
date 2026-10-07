@@ -557,6 +557,79 @@ function createServer(
   registerFivePaisaTools(server, env, baseUrl);
 
   // ==========================================================
+  // CONSOLIDATED INVESTMENT STATUS
+  // ==========================================================
+  server.registerTool(
+    "investment_status",
+    {
+      description: "Return the live consolidated Investments Dashboard across Zerodha equity and Coin mutual funds, Angel One, Groww, 5Paisa and m.Stock. Read-only. One broker failure does not block the other brokers.",
+    },
+    async () => {
+      const results = await Promise.allSettled([
+        getZerodhaInvestmentHoldings(env),
+        getAngelOneHoldings(env),
+        getGrowwHoldings(env),
+        getFivePaisaHoldings(env, baseUrl),
+        getMStockHoldings(env),
+      ]);
+
+      const names = ["Zerodha", "Angel One", "Groww", "5Paisa", "m.Stock"];
+      const brokers: any[] = [];
+      const holdings: any[] = [];
+
+      results.forEach((r, i) => {
+        if (r.status === "fulfilled") {
+          const v: any = r.value;
+          brokers.push({
+            broker: names[i],
+            status: "LIVE",
+            error: null,
+            investment_value: v?.summary?.investment_value ?? null,
+            current_value: v?.summary?.current_value ?? null,
+            pnl: v?.summary?.pnl ?? null,
+            pnl_percent: v?.summary?.pnl_percent ?? null,
+          });
+          for (const h of v?.holdings ?? []) holdings.push({ broker: names[i], ...h });
+        } else {
+          brokers.push({
+            broker: names[i],
+            status: "ERROR",
+            error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+            investment_value: null,
+            current_value: null,
+            pnl: null,
+            pnl_percent: null,
+          });
+        }
+      });
+
+      const total = holdings.reduce((s: any, h: any) => {
+        if (Number.isFinite(h.investment_value)) s.investment_value += h.investment_value;
+        if (Number.isFinite(h.current_value)) s.current_value += h.current_value;
+        return s;
+      }, { investment_value: 0, current_value: 0 });
+      total.pnl = total.current_value - total.investment_value;
+      total.pnl_percent = total.investment_value ? (total.pnl / total.investment_value) * 100 : null;
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            status: "LIVE",
+            dashboard: "Investments",
+            as_of: new Date().toISOString(),
+            scope: "Equity, ETFs as represented in equity holdings, and Zerodha Coin mutual funds.",
+            authentication: brokers.map((b) => ({ broker: b.broker, status: b.status, error: b.error })),
+            portfolio_summary: { brokers, total },
+            holdings,
+            read_only: true,
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  // ==========================================================
   // HELLO
   // ==========================================================
 
