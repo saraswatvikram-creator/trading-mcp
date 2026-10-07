@@ -124,7 +124,7 @@ async function angelOneGet(url: string, env: AngelOneEnv, jwtToken: string): Pro
   return data;
 }
 
-export export async function getAngelOneHoldings(env: AngelOneEnv): Promise<any> {
+export async function getAngelOneHoldings(env: AngelOneEnv): Promise<any> {
   const login = await angelOneLogin(env);
   const holdings = await angelOneGet(ANGELONE_ALL_HOLDING_URL, env, login.jwtToken);
   const data = holdings?.data ?? {};
