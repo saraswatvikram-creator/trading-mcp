@@ -605,6 +605,10 @@ function App() {
   if (window.location.pathname === "/investments") {
     return <InvestmentsDashboard />;
   }
+  return <MainApp />;
+}
+
+function MainApp() {
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
   const [tools, setTools] = useState<McpTool[]>([]);
