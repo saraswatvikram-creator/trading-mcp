@@ -264,6 +264,7 @@ type InvestmentBroker = {
   pnl: number;
   pnl_percent: number | null;
   holdings: InvestmentHolding[];
+  new_investment: number | null;
 };
 
 function money(value: number | null | undefined) {
@@ -429,7 +430,10 @@ function InvestmentsDashboard() {
             broker,
             status: "connected",
             ...summary,
-            holdings
+            holdings,
+            new_investment: Object.prototype.hasOwnProperty.call(previousInvestment, broker)
+              ? summary.investment_value - previousInvestment[broker]
+              : null
           });
         } catch (e) {
           rows.push({
@@ -440,12 +444,24 @@ function InvestmentsDashboard() {
             current_value: 0,
             pnl: 0,
             pnl_percent: null,
-            holdings: []
+            holdings: [],
+            new_investment: null
           });
         }
       }
 
       setBrokers(rows);
+      const nextSnapshot: Record<string, number> = {};
+      for (const row of rows) {
+        if (row.status === "connected" && Number.isFinite(row.investment_value)) {
+          nextSnapshot[row.broker] = row.investment_value;
+        }
+      }
+      try {
+        localStorage.setItem(snapshotKey, JSON.stringify(nextSnapshot));
+      } catch {
+        // Snapshot persistence is optional; live investment retrieval must continue.
+      }
       setLastUpdated(new Date());
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -561,6 +577,7 @@ function InvestmentsDashboard() {
                   <tr>
                     <th className="text-left p-3">Broker</th>
                     <th className="text-right p-3">Investment Value</th>
+                    <th className="text-right p-3">New Investments</th>
                     <th className="text-right p-3">Current Value</th>
                     <th className="text-right p-3">P&L</th>
                     <th className="text-right p-3">P&L %</th>
@@ -571,6 +588,7 @@ function InvestmentsDashboard() {
                     <tr key={b.broker} className="border-t border-kumo-line">
                       <td className="p-3 font-medium">{b.broker}</td>
                       <td className="p-3 text-right">{b.status === "connected" ? money(b.investment_value) : "—"}</td>
+                      <td className="p-3 text-right">{b.status === "connected" ? money(b.new_investment) : "—"}</td>
                       <td className="p-3 text-right">{b.status === "connected" ? money(b.current_value) : "—"}</td>
                       <td className={`p-3 text-right ${b.pnl >= 0 ? "text-green-600" : "text-red-600"}`}>
                         {b.status === "connected" ? money(b.pnl) : "—"}
@@ -583,6 +601,7 @@ function InvestmentsDashboard() {
                   <tr className="border-t-2 border-kumo-line font-semibold">
                     <td className="p-3">TOTAL</td>
                     <td className="p-3 text-right">{money(totals.investment)}</td>
+                    <td className="p-3 text-right">{money(brokers.some(b => b.new_investment === null) ? null : brokers.reduce((s, b) => s + (b.new_investment ?? 0), 0))}</td>
                     <td className="p-3 text-right">{money(totals.current)}</td>
                     <td className={`p-3 text-right ${totals.pnl >= 0 ? "text-green-600" : "text-red-600"}`}>{money(totals.pnl)}</td>
                     <td className={`p-3 text-right ${(totalPct ?? 0) >= 0 ? "text-green-600" : "text-red-600"}`}>{pct(totalPct)}</td>
