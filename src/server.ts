@@ -5,6 +5,7 @@ import { registerMStockTools, getMStockHoldings } from "./mstock";
 import { registerFivePaisaTools, handleFivePaisaCallback, getFivePaisaHoldings } from "./fivepaisa";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
+import { runUpdateAuth, handleAuthRoute } from "./auth";
 
 type Env = {
   ZERODHA_API_KEY: string;
@@ -555,6 +556,57 @@ function createServer(
   registerGrowwTools(server, env);
   registerMStockTools(server, env);
   registerFivePaisaTools(server, env, baseUrl);
+  // ==========================================================
+  // DAILY AUTHENTICATION GATE
+  // ==========================================================
+  server.registerTool(
+    "update_auth",
+    {
+      description:
+        "Run the daily Trading Desk authentication gate. Validate and, where configured, automatically authenticate Zerodha, AngelOne, Groww, 5Paisa and m.Stock. Return broker-specific authentication hyperlinks, final broker status, and Trading Desk readiness. Read-only; never places, modifies, cancels or squares off orders.",
+    },
+    async () => {
+      const payload = await runUpdateAuth(env, baseUrl);
+      const rows = payload.authentication
+        .map((item: any, index: number) =>
+          `| ${index + 1} | **${item.broker}** | [Complete Authentication](${item.action_url}) | ${item.status === "VALID" ? "🟢 VALID" : "🔴 AUTHENTICATION REQUIRED"} |`
+        )
+        .join("\n");
+
+      const toolStatus =
+        payload.tool_refresh.status === "READY"
+          ? "🟢 READY"
+          : "🟡 ONE-TIME CHATGPT ACTION REQUIRED";
+
+      const text = [
+        "## Update Auth",
+        "",
+        "| # | Broker / Component | Action | Status |",
+        "|---:|---|---|---|",
+        rows,
+        `| 6 | **Zerodha Trading Desk** | Refresh Tools in the ChatGPT plugin | ${toolStatus} |`,
+        `| 7 | **Trading Desk** | Final authentication check | ${payload.status === "READY" ? "🟢 READY" : "🔴 NOT READY"} |`,
+        "",
+        payload.status === "READY"
+          ? "### Trading Desk READY"
+          : "### Trading Desk NOT READY — complete the failed broker authentication link(s) above and run **Update Auth** again.",
+        "",
+        payload.status === "READY"
+          ? "You can now run **Update Dashboard**, **Update P/L** and **Update Investments**."
+          : "Downstream Trading Desk updates must not be run until all five brokers are VALID.",
+        "",
+        "### Automation note",
+        payload.tool_refresh.message,
+        "",
+        "Read-only authentication workflow. No trading action is performed.",
+      ].join("\n");
+
+      return {
+        content: [{ type: "text", text }],
+      };
+    }
+  );
+
 
   // ==========================================================
   // CONSOLIDATED INVESTMENTS
@@ -4660,6 +4712,11 @@ export default {
         request,
         env
       );
+    }
+
+    if (url.pathname.startsWith("/auth/")) {
+      const broker = url.pathname.slice("/auth/".length).toLowerCase();
+      return handleAuthRoute(request, env, url.origin, broker);
     }
 
     if (url.pathname === "/fivepaisa/callback") {

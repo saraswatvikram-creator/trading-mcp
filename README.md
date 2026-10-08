@@ -63,3 +63,35 @@ Do not put the API key or TOTP secret in ChatGPT messages.
 - No order placement, modification, cancellation, conversion or square-off is exposed.
 - API key and TOTP secret remain Cloudflare Worker secrets.
 - Access tokens remain in the existing KV namespace under `mstock_*` keys.
+
+## Daily Trading Desk authentication
+
+The preferred first command each trading day is:
+
+**update auth**
+
+The `update_auth` MCP tool validates the five broker sessions in parallel:
+
+- Zerodha
+- AngelOne
+- Groww
+- 5Paisa
+- m.Stock
+
+Where broker-side TOTP/session automation is configured, authentication is performed automatically. The tool also returns broker-specific Worker authentication hyperlinks:
+
+- `/auth/zerodha`
+- `/auth/angelone`
+- `/auth/groww`
+- `/auth/fivepaisa`
+- `/auth/mstock`
+
+The workflow is read-only and never places, modifies, cancels or squares off an order.
+
+After all five brokers are valid, the user can run:
+
+1. **update dashboard**
+2. **update P/L**
+3. **update investments**
+
+The ChatGPT plugin's **Refresh Tools** catalogue is a ChatGPT UI operation and cannot be triggered by an MCP server. After the new tool is first deployed, refresh the **Zerodha Trading Desk** tools once so ChatGPT loads `update_auth`. Subsequent daily broker authentication is automated by the tool.
