@@ -311,6 +311,14 @@ function InvestmentsDashboard() {
       await mcpFetch("/mcp", "notifications/initialized", {}, sessionId);
 
       const rows: InvestmentBroker[] = [];
+      const snapshotKey = "trading-mcp:investments:last-investment-values:v1";
+      let previousInvestment: Record<string, number> = {};
+      try {
+        const stored = localStorage.getItem(snapshotKey);
+        if (stored) previousInvestment = JSON.parse(stored);
+      } catch {
+        previousInvestment = {};
+      }
 
       for (const [broker, tool] of brokerTools) {
         try {
