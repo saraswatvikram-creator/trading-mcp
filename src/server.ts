@@ -730,6 +730,12 @@ function createServer(
             scope: "Equity, ETFs as represented in equity holdings, and Zerodha Coin mutual funds.",
             authentication: brokers.map((b) => ({ broker: b.broker, status: b.status, error: b.error })),
             portfolio_summary: { brokers, total },
+            new_investments: {
+              status: baselineStatus,
+              definition: "Change in investment/cost basis since the previous successful five-broker update; market price/NAV movement does not count as a new investment.",
+              storage: env.ZERODHA_TOKEN_STORE ? "server_kv" : "unavailable",
+              error: snapshotError,
+            },
             holdings,
             read_only: true,
           }, null, 2),
