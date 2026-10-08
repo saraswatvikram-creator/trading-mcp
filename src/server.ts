@@ -592,7 +592,7 @@ function createServer(
           : "### Trading Desk NOT READY — complete the failed broker authentication link(s) above and run **Update Auth** again.",
         "",
         payload.status === "READY"
-          ? "You can now run **Update Dashboard**, **Update P/L** and **Update Investments**."
+          ? "You can now run **Update Trades**, **Update P/L** and **Update Investments**."
           : "Downstream Trading Desk updates must not be run until all five brokers are VALID.",
         "",
         "### Automation note",
