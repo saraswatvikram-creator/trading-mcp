@@ -203,6 +203,10 @@ async function createFivePaisaLoginUrl(
   return url.toString();
 }
 
+export async function getFivePaisaLoginUrl(env: FivePaisaEnv, baseUrl: string): Promise<string> {
+  return createFivePaisaLoginUrl(env, baseUrl);
+}
+
 async function authenticateFivePaisaWithTotp(
   env: FivePaisaEnv
 ): Promise<{
