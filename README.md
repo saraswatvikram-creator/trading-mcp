@@ -90,8 +90,19 @@ The workflow is read-only and never places, modifies, cancels or squares off an 
 
 After all five brokers are valid, the user can run:
 
-1. **update dashboard**
+1. **Update Trades**
 2. **update P/L**
 3. **update investments**
+
+### Trading Desk RAG — 75% Target / MTM
+
+The **75% Target / MTM** dashboard column uses the following RAG thresholds against Max Profit:
+
+- 🟢 **≥75% of Max**
+- 🟠 **60% to <75% of Max**
+- 🔴 **≤−65% of Max**
+- No RAG indicator for values between **−65% and <60%** of Max.
+
+The RAG is applied to the **current MTM as a percentage of Max Profit**, not to the absolute MTM amount. The same thresholds must be used consistently in Portfolio Totals, Trade Summary, Broker Summary, and New Trades wherever the **75% Target / MTM** column is displayed.
 
 The ChatGPT plugin's **Refresh Tools** catalogue is a ChatGPT UI operation and cannot be triggered by an MCP server. After the new tool is first deployed, refresh the **Zerodha Trading Desk** tools once so ChatGPT loads `update_auth`. Subsequent daily broker authentication is automated by the tool.
