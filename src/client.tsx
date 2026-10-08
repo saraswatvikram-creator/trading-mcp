@@ -287,14 +287,6 @@ function InvestmentsDashboard() {
     setLoading(true);
     setError(null);
 
-    const brokerTools = [
-      ["Zerodha", "zerodha_holdings"],
-      ["Angel One", "angelone_holdings"],
-      ["Groww", "groww_holdings"],
-      ["5Paisa", "fivepaisa_holdings"],
-      ["m.Stock", "mstock_holdings"]
-    ] as const;
-
     try {
       const init = await mcpFetch(
         "/mcp",
@@ -310,167 +302,69 @@ function InvestmentsDashboard() {
       const sessionId = init.sessionId;
       await mcpFetch("/mcp", "notifications/initialized", {}, sessionId);
 
-      const rows: InvestmentBroker[] = [];
-      const snapshotKey = "trading-mcp:investments:last-investment-values:v1";
-      let previousInvestment: Record<string, number> = {};
-      try {
-        const stored = localStorage.getItem(snapshotKey);
-        if (stored) previousInvestment = JSON.parse(stored);
-      } catch {
-        previousInvestment = {};
+      // Use the consolidated server-side tool so the New Investments baseline
+      // is identical for ChatGPT and the browser dashboard. Do not calculate
+      // this value from browser localStorage.
+      const res = await mcpFetch(
+        "/mcp",
+        "tools/call",
+        { name: "update_investments", arguments: {} },
+        sessionId
+      );
+      const result = res.data?.result as
+        | { content?: Array<{ type: string; text?: string }>; isError?: boolean }
+        | undefined;
+      const rawText = result?.content?.[0]?.text ?? "";
+      if (!rawText || result?.isError) throw new Error(rawText || "Update Investments failed.");
+
+      const raw = JSON.parse(rawText);
+      if (raw?.status !== "LIVE" || !Array.isArray(raw?.portfolio_summary?.brokers)) {
+        throw new Error("Update Investments returned an invalid live response.");
       }
 
-      for (const [broker, tool] of brokerTools) {
-        try {
-          const res = await mcpFetch(
-            "/mcp",
-            "tools/call",
-            { name: tool, arguments: {} },
-            sessionId
-          );
-          const result = res.data?.result as
-            | { content?: Array<{ type: string; text?: string }>; isError?: boolean }
-            | undefined;
-          const rawText = result?.content?.[0]?.text ?? "";
-          if (!rawText || result?.isError) throw new Error(rawText || "Tool call failed.");
+      const rows: InvestmentBroker[] = raw.portfolio_summary.brokers.map((b: any) => ({
+        broker: b.broker,
+        status: b.status === "LIVE" ? "connected" : "error",
+        message: b.error ?? undefined,
+        investment_value: Number(b.investment_value ?? 0),
+        current_value: Number(b.current_value ?? 0),
+        pnl: Number(b.pnl ?? 0),
+        pnl_percent: Number.isFinite(Number(b.pnl_percent)) ? Number(b.pnl_percent) : null,
+        holdings: [],
+        new_investment: Number.isFinite(Number(b.new_investment_since_last_update))
+          ? Number(b.new_investment_since_last_update)
+          : null
+      }));
 
-          const raw = JSON.parse(rawText);
-          let holdings: InvestmentHolding[] = [];
-          let summary = { investment_value: 0, current_value: 0, pnl: 0, pnl_percent: null as number | null };
+      const serverHoldings: InvestmentHolding[] = Array.isArray(raw?.holdings)
+        ? raw.holdings.map((h: any) => ({
+            broker: h.broker,
+            asset_class: h.asset_class ?? "Equity",
+            symbol: h.symbol ?? h.fund ?? null,
+            exchange: h.exchange ?? null,
+            isin: h.isin ?? null,
+            quantity: Number(h.quantity ?? 0),
+            average_price: Number.isFinite(Number(h.average_price)) ? Number(h.average_price) : null,
+            ltp: Number.isFinite(Number(h.ltp)) ? Number(h.ltp) : null,
+            investment_value: Number.isFinite(Number(h.investment_value)) ? Number(h.investment_value) : null,
+            current_value: Number.isFinite(Number(h.current_value)) ? Number(h.current_value) : null,
+            pnl: Number.isFinite(Number(h.pnl)) ? Number(h.pnl) : null,
+            pnl_percent: Number.isFinite(Number(h.pnl_percent)) ? Number(h.pnl_percent) : null
+          }))
+        : [];
 
-          if (broker === "Zerodha") {
-            const data = Array.isArray(raw?.data) ? raw.data : [];
-            holdings = data.map((r: any) => {
-              const quantity = Number(r?.quantity ?? 0);
-              const average = Number(r?.average_price);
-              const ltp = Number(r?.last_price);
-              const investment = Number.isFinite(average) ? average * quantity : null;
-              const current = Number.isFinite(ltp) ? ltp * quantity : null;
-              const pnl = Number.isFinite(Number(r?.pnl))
-                ? Number(r.pnl)
-                : investment !== null && current !== null ? current - investment : null;
-              return {
-                broker,
-                asset_class: "Equity",
-                symbol: r?.tradingsymbol ?? null,
-                exchange: r?.exchange ?? null,
-                isin: r?.isin ?? null,
-                quantity,
-                average_price: Number.isFinite(average) ? average : null,
-                ltp: Number.isFinite(ltp) ? ltp : null,
-                investment_value: investment,
-                current_value: current,
-                pnl,
-                pnl_percent: investment ? ((pnl ?? 0) / investment) * 100 : null
-              };
-            });
-            // Zerodha Coin mutual funds are exposed by a separate Kite API.
-            const mfRes = await mcpFetch(
-              "/mcp",
-              "tools/call",
-              { name: "zerodha_mf_holdings", arguments: {} },
-              sessionId
-            );
-            const mfResult = mfRes.data?.result as
-              | { content?: Array<{ type: string; text?: string }>; isError?: boolean }
-              | undefined;
-            const mfText = mfResult?.content?.[0]?.text ?? "";
-            if (!mfText || mfResult?.isError) throw new Error(mfText || "Mutual fund tool call failed.");
-            const mfRaw = JSON.parse(mfText);
-            if (!Array.isArray(mfRaw?.data)) throw new Error(mfRaw?.message || "Mutual fund holdings unavailable.");
-            const mfHoldings: InvestmentHolding[] = mfRaw.data.map((r: any) => ({
-              broker,
-              asset_class: "Mutual Fund",
-              symbol: r?.fund ?? r?.symbol ?? null,
-              exchange: null,
-              isin: r?.isin ?? r?.symbol ?? null,
-              quantity: Number(r?.quantity ?? 0),
-              average_price: Number.isFinite(Number(r?.average_price)) ? Number(r.average_price) : null,
-              ltp: Number.isFinite(Number(r?.ltp)) ? Number(r.ltp) : null,
-              investment_value: Number.isFinite(Number(r?.investment_value)) ? Number(r.investment_value) : null,
-              current_value: Number.isFinite(Number(r?.current_value)) ? Number(r.current_value) : null,
-              pnl: Number.isFinite(Number(r?.pnl)) ? Number(r.pnl) : null,
-              pnl_percent: Number.isFinite(Number(r?.pnl_percent)) ? Number(r.pnl_percent) : null
-            }));
-            holdings = holdings.concat(mfHoldings);
-
-            const investment = holdings.reduce((s, r) => s + (r.investment_value ?? 0), 0);
-            const current = holdings.reduce((s, r) => s + (r.current_value ?? 0), 0);
-            const pnlValue = current - investment;
-            summary = {
-              investment_value: investment,
-              current_value: current,
-              pnl: pnlValue,
-              pnl_percent: investment ? (pnlValue / investment) * 100 : null
-            };
-          } else {
-            if (!Array.isArray(raw?.holdings)) {
-              throw new Error(raw?.message || raw?.reason || "Holdings unavailable; broker authentication is required.");
-            }
-            holdings = raw.holdings.map((r: any) => ({
-              ...r,
-              broker,
-              asset_class: r?.asset_class ?? "Equity"
-            }));
-            summary = {
-              investment_value: Number(raw?.summary?.investment_value ?? 0),
-              current_value: Number(raw?.summary?.current_value ?? 0),
-              pnl: Number(raw?.summary?.pnl ?? 0),
-              pnl_percent: Number.isFinite(Number(raw?.summary?.pnl_percent))
-                ? Number(raw.summary.pnl_percent)
-                : null
-            };
-          }
-
-          if (broker === "Zerodha") {
-            const investment = holdings.reduce((s, r) => s + (r.investment_value ?? 0), 0);
-            const current = holdings.reduce((s, r) => s + (r.current_value ?? 0), 0);
-            const pnlValue = current - investment;
-            summary = {
-              investment_value: investment,
-              current_value: current,
-              pnl: pnlValue,
-              pnl_percent: investment ? (pnlValue / investment) * 100 : null
-            };
-          }
-
-          rows.push({
-            broker,
-            status: "connected",
-            ...summary,
-            holdings,
-            new_investment: Object.prototype.hasOwnProperty.call(previousInvestment, broker)
-              ? summary.investment_value - previousInvestment[broker]
-              : null
-          });
-        } catch (e) {
-          rows.push({
-            broker,
-            status: "error",
-            message: e instanceof Error ? e.message : String(e),
-            investment_value: 0,
-            current_value: 0,
-            pnl: 0,
-            pnl_percent: null,
-            holdings: [],
-            new_investment: null
-          });
-        }
+      const holdingsByBroker = new Map<string, InvestmentHolding[]>();
+      for (const h of serverHoldings) {
+        const list = holdingsByBroker.get(h.broker) ?? [];
+        list.push(h);
+        holdingsByBroker.set(h.broker, list);
+      }
+      for (const row of rows) {
+        row.holdings = holdingsByBroker.get(row.broker) ?? [];
       }
 
       setBrokers(rows);
-      const nextSnapshot: Record<string, number> = {};
-      for (const row of rows) {
-        if (row.status === "connected" && Number.isFinite(row.investment_value)) {
-          nextSnapshot[row.broker] = row.investment_value;
-        }
-      }
-      try {
-        localStorage.setItem(snapshotKey, JSON.stringify(nextSnapshot));
-      } catch {
-        // Snapshot persistence is optional; live investment retrieval must continue.
-      }
-      setLastUpdated(new Date());
+      setLastUpdated(raw?.as_of ? new Date(raw.as_of) : new Date());
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
