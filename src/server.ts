@@ -628,15 +628,30 @@ function createServer(
       const names = ["Zerodha", "Angel One", "Groww", "5Paisa", "m.Stock"];
       const brokers: any[] = [];
       const holdings: any[] = [];
+      const snapshotKey = "investments:last-investment-values:v1";
+      let previousInvestment: Record<string, number> = {};
+
+      if (env.ZERODHA_TOKEN_STORE) {
+        try {
+          const stored = await env.ZERODHA_TOKEN_STORE.get(snapshotKey, "json");
+          if (stored && typeof stored === "object") previousInvestment = stored as Record<string, number>;
+        } catch {
+          previousInvestment = {};
+        }
+      }
 
       results.forEach((r, i) => {
         if (r.status === "fulfilled") {
           const v: any = r.value;
+          const investmentValue = v?.summary?.investment_value ?? null;
           brokers.push({
             broker: names[i],
             status: "LIVE",
             error: null,
-            investment_value: v?.summary?.investment_value ?? null,
+            investment_value: investmentValue,
+            new_investment_since_last_update: Object.prototype.hasOwnProperty.call(previousInvestment, names[i]) && investmentValue !== null
+              ? investmentValue - previousInvestment[names[i]]
+              : null,
             current_value: v?.summary?.current_value ?? null,
             pnl: v?.summary?.pnl ?? null,
             pnl_percent: v?.summary?.pnl_percent ?? null,
@@ -648,6 +663,7 @@ function createServer(
             status: "ERROR",
             error: r.reason instanceof Error ? r.reason.message : String(r.reason),
             investment_value: null,
+            new_investment_since_last_update: null,
             current_value: null,
             pnl: null,
             pnl_percent: null,
@@ -655,12 +671,30 @@ function createServer(
         }
       });
 
+      if (env.ZERODHA_TOKEN_STORE) {
+        const nextSnapshot: Record<string, number> = {};
+        for (const broker of brokers) {
+          if (broker.status === "LIVE" && Number.isFinite(broker.investment_value)) {
+            nextSnapshot[broker.broker] = broker.investment_value;
+          }
+        }
+        try {
+          await env.ZERODHA_TOKEN_STORE.put(snapshotKey, JSON.stringify(nextSnapshot));
+        } catch {
+          // Snapshot persistence is optional; live investment retrieval continues.
+        }
+      }
+
       const total = holdings.reduce((s: any, h: any) => {
         if (Number.isFinite(h.investment_value)) s.investment_value += h.investment_value;
         if (Number.isFinite(h.current_value)) s.current_value += h.current_value;
         return s;
       }, { investment_value: 0, current_value: 0 });
       total.pnl = total.current_value - total.investment_value;
+      const knownNewInvestments = brokers.filter((b) => b.status === "LIVE" && b.new_investment_since_last_update !== null);
+      total.new_investment_since_last_update = knownNewInvestments.length === brokers.filter((b) => b.status === "LIVE").length && knownNewInvestments.length > 0
+        ? knownNewInvestments.reduce((s: number, b: any) => s + b.new_investment_since_last_update, 0)
+        : null;
       total.pnl_percent = total.investment_value ? (total.pnl / total.investment_value) * 100 : null;
 
       return {
