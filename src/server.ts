@@ -2,9 +2,10 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { registerAngelOneTools, getAngelOneHoldings } from "./angelone";
 import { registerGrowwTools, getGrowwHoldings } from "./groww";
 import { registerMStockTools, getMStockHoldings } from "./mstock";
-import { registerFivePaisaTools, handleFivePaisaCallback, getFivePaisaHoldings, getFivePaisaLoginUrl } from "./fivepaisa";
+import { registerFivePaisaTools, handleFivePaisaCallback, getFivePaisaHoldings } from "./fivepaisa";
 import { createMcpHandler } from "agents/mcp/server";
-import { z } from "zod";\nimport { runUpdateAuth, handleAuthRoute } from "./auth";
+import { z } from "zod";
+import { runUpdateAuth, handleAuthRoute } from "./auth";
 
 type Env = {
   ZERODHA_API_KEY: string;
