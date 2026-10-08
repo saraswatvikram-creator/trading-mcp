@@ -289,7 +289,7 @@ export async function handleAuthRoute(
 
 function authHtml(broker: string, valid: boolean, message: string): string {
   const icon = valid ? "🟢" : "🔴";
-  return "<!doctype html><html><head><meta charset="utf-8"><title>" +
+  return "<!doctype html><html><head><meta charset=\"utf-8\"><title>" +
     escapeHtml(broker) +
     " Authentication</title></head><body><h2>" +
     icon +
