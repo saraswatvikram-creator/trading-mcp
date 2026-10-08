@@ -557,10 +557,10 @@ function createServer(
   registerFivePaisaTools(server, env, baseUrl);
 
   // ==========================================================
-  // CONSOLIDATED INVESTMENT STATUS
+  // CONSOLIDATED INVESTMENTS
   // ==========================================================
   server.registerTool(
-    "investment_status",
+    "update_investments",
     {
       description: "Return the live consolidated Investments Dashboard across Zerodha equity and Coin mutual funds, Angel One, Groww, 5Paisa and m.Stock. Read-only. One broker failure does not block the other brokers.",
     },
