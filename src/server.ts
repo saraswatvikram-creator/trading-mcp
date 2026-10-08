@@ -628,28 +628,40 @@ function createServer(
       const names = ["Zerodha", "Angel One", "Groww", "5Paisa", "m.Stock"];
       const brokers: any[] = [];
       const holdings: any[] = [];
-      const snapshotKey = "investments:last-investment-values:v1";
-      let previousInvestment: Record<string, number> = {};
+      // Server-side baseline is authoritative. This keeps ChatGPT and the
+      // browser dashboard identical and avoids browser/session-specific baselines.
+      const snapshotKey = "investments:last-investment-values:v2";
+      const previousInvestment: Record<string, number> = {};
+      let baselineAvailable = false;
+      let snapshotError: string | null = null;
 
-      if (env.ZERODHA_TOKEN_STORE) {
+      if (!env.ZERODHA_TOKEN_STORE) {
+        snapshotError = "Investment baseline storage (ZERODHA_TOKEN_STORE) is unavailable.";
+      } else {
         try {
           const stored = await env.ZERODHA_TOKEN_STORE.get(snapshotKey, "json");
-          if (stored && typeof stored === "object") previousInvestment = stored as Record<string, number>;
-        } catch {
-          previousInvestment = {};
+          if (stored && typeof stored === "object") {
+            Object.assign(previousInvestment, stored);
+            baselineAvailable = Object.keys(previousInvestment).length > 0;
+          }
+        } catch (error) {
+          snapshotError = error instanceof Error ? error.message : String(error);
         }
       }
 
       results.forEach((r, i) => {
         if (r.status === "fulfilled") {
           const v: any = r.value;
-          const investmentValue = v?.summary?.investment_value ?? null;
+          const investmentValue = Number.isFinite(Number(v?.summary?.investment_value))
+            ? Number(v.summary.investment_value)
+            : null;
+          const hasPrevious = Object.prototype.hasOwnProperty.call(previousInvestment, names[i]);
           brokers.push({
             broker: names[i],
             status: "LIVE",
             error: null,
             investment_value: investmentValue,
-            new_investment_since_last_update: Object.prototype.hasOwnProperty.call(previousInvestment, names[i]) && investmentValue !== null
+            new_investment_since_last_update: baselineAvailable && hasPrevious && investmentValue !== null
               ? investmentValue - previousInvestment[names[i]]
               : null,
             current_value: v?.summary?.current_value ?? null,
@@ -671,17 +683,24 @@ function createServer(
         }
       });
 
-      if (env.ZERODHA_TOKEN_STORE) {
+      // Only advance the baseline after a complete five-broker live retrieval.
+      // If one broker fails, retain the previous baseline so a temporary API
+      // outage cannot erase the next-update comparison.
+      const allBrokersLive = brokers.length === names.length && brokers.every(
+        (b) => b.status === "LIVE" && Number.isFinite(b.investment_value)
+      );
+
+      let baselineStatus: "ESTABLISHED" | "UPDATED" | "UNAVAILABLE" = "UNAVAILABLE";
+      if (env.ZERODHA_TOKEN_STORE && allBrokersLive) {
         const nextSnapshot: Record<string, number> = {};
         for (const broker of brokers) {
-          if (broker.status === "LIVE" && Number.isFinite(broker.investment_value)) {
-            nextSnapshot[broker.broker] = broker.investment_value;
-          }
+          nextSnapshot[broker.broker] = broker.investment_value;
         }
         try {
           await env.ZERODHA_TOKEN_STORE.put(snapshotKey, JSON.stringify(nextSnapshot));
-        } catch {
-          // Snapshot persistence is optional; live investment retrieval continues.
+          baselineStatus = baselineAvailable ? "UPDATED" : "ESTABLISHED";
+        } catch (error) {
+          snapshotError = error instanceof Error ? error.message : String(error);
         }
       }
 
@@ -691,12 +710,16 @@ function createServer(
         return s;
       }, { investment_value: 0, current_value: 0 });
       total.pnl = total.current_value - total.investment_value;
-      const knownNewInvestments = brokers.filter((b) => b.status === "LIVE" && b.new_investment_since_last_update !== null);
-      total.new_investment_since_last_update = knownNewInvestments.length === brokers.filter((b) => b.status === "LIVE").length && knownNewInvestments.length > 0
-        ? knownNewInvestments.reduce((s: number, b: any) => s + b.new_investment_since_last_update, 0)
-        : null;
+      const liveBrokers = brokers.filter((b) => b.status === "LIVE");
+      const knownNewInvestments = liveBrokers.filter(
+        (b) => b.new_investment_since_last_update !== null
+      );
+      total.new_investment_since_last_update =
+        liveBrokers.length === names.length &&
+        knownNewInvestments.length === names.length
+          ? knownNewInvestments.reduce((s: number, b: any) => s + b.new_investment_since_last_update, 0)
+          : null;
       total.pnl_percent = total.investment_value ? (total.pnl / total.investment_value) * 100 : null;
-
       return {
         content: [{
           type: "text",
