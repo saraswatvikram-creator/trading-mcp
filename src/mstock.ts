@@ -374,6 +374,58 @@ export async function getMStockHoldings(env: MStockEnv, totp?: string): Promise<
 }
 
 
+export async function getMStockMargin(env: MStockEnv): Promise<any> {
+  const live = await liveOrTotp(env);
+  if (!live.live) {
+    throw new Error("MSTOCK_AUTH_REQUIRED: " + String(live.auth?.reason ?? "Could not establish an authenticated m.Stock session."));
+  }
+
+  const { apiKey } = config(env);
+  const token = await storedToken(env);
+  if (!token) throw new Error("MSTOCK_AUTH_REQUIRED: No m.Stock access token is stored.");
+
+  const response = await get("/openapi/typea/user/fundsummary", apiKey, token);
+  const data = response?.data ?? response?.payload ?? response;
+  const numeric = (...keys: string[]): number | null => {
+    for (const key of keys) {
+      const value = data?.[key] ?? data?.[key.toLowerCase()];
+      if (value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))) {
+        return Number(value);
+      }
+    }
+    return null;
+  };
+
+  const availableField = [
+    "AVAILABLE_FNO_MARGIN",
+    "FNO_AVAILABLE_MARGIN",
+    "AVAILABLE_MARGIN",
+    "AVAILABLE_BALANCE",
+  ].find((key) => numeric(key) !== null) ?? null;
+
+  return {
+    status: "LIVE",
+    broker: "m.Stock",
+    available_for_options: availableField ? numeric(availableField) : null,
+    available_for_options_source_field: availableField,
+    available_balance: numeric("AVAILABLE_BALANCE"),
+    clear_balance: numeric("CLEAR_BALANCE"),
+    collateral: numeric("COLLATERALS"),
+    mutual_fund_collateral: numeric("MF_COLLATERAL"),
+    margin_utilised: numeric("AMOUNT_UTILIZED"),
+    option_buy_premium_utilised: numeric("OPT_BUY_PRIMIUM_UTILIZE"),
+    peak_margin: numeric("PEAK_MARGIN"),
+    mtf_available_balance: numeric("MTF_AVAILABLE_BALANCE"),
+    mtf_collateral: numeric("MTF_COLLATERAL"),
+    mtf_utilised: numeric("MTF_UTILIZE"),
+    token_expiry: live.data.tokenExpiry,
+    source: "m.Stock Type A /openapi/typea/user/fundsummary",
+    as_of: new Date().toISOString(),
+    raw: data,
+    read_only: true,
+  };
+}
+
 export function registerMStockTools(server: any, env: MStockEnv): void {
   server.registerTool(
     "mstock_auth_status",
@@ -460,6 +512,26 @@ export function registerMStockTools(server: any, env: MStockEnv): void {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return result({ status: "ERROR", broker: "m.Stock", message: message.replace(/^MSTOCK_[A-Z_]+:\s*/, ""), read_only: true });
+      }
+    }
+  );
+
+  server.registerTool(
+    "mstock_margin",
+    {
+      description: "Read live m.Stock Type A fund summary, available balance, collateral and margin utilisation. Automatically authenticates with configured TOTP if the session is missing or expired. Read-only.",
+    },
+    async () => {
+      try {
+        return result(await getMStockMargin(env));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return result({
+          status: "ERROR",
+          broker: "m.Stock",
+          message: message.replace(/^MSTOCK_[A-Z_]+:\\s*/, ""),
+          read_only: true,
+        });
       }
     }
   );
