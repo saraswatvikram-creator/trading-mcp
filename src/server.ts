@@ -916,7 +916,7 @@ function createServer(
           const tradeTime = toIso(row?.trade_time ?? row?.trade_date_time ?? row?.trade_date ?? row?.filltime ?? row?.order_timestamp ?? row?.ORDER_DATE_TIME);
           const symbol = row?.trading_symbol ?? row?.tradingsymbol ?? row?.symbol ?? row?.SYMBOL;
           if (!executionId || !side || !quantity || price === null || !tradeTime || !symbol) return null;
-          return { broker: "m.Stock", executionId, orderId: row?.order_id == null && row?.orderid == null && row?.ORDER_NUMBER == null ? null : String(row?.order_id ?? row?.orderid ?? row?.ORDER_NUMBER), exchangeOrderId: row?.exchange_order_id == null ? null : String(row.exchange_order_id), tradeTime, tradingSymbol: String(symbol), exchange: row?.exchange ?? row?.EXCHANGE ?? null, segment: row?.segment ?? row?.product ?? row?.SEGMENT ?? null, side, quantity, price, brokerRealisedPnl: null, charges: null, taxes: null, raw: row, sourceEndpoint: result.endpoint };
+          return { broker: "m.Stock", executionId, orderId: row?.order_id == null && row?.orderid == null && row?.ORDER_NUMBER == null ? null : String(row?.order_id ?? row?.orderid ?? row?.ORDER_NUMBER), exchangeOrderId: row?.exchange_order_id == null && row?.EXCH_ORDER_NUMBER == null ? null : String(row?.exchange_order_id ?? row?.EXCH_ORDER_NUMBER), tradeTime, tradingSymbol: String(symbol), exchange: row?.exchange ?? row?.EXCHANGE ?? null, segment: row?.segment ?? row?.product ?? row?.SEGMENT ?? null, side, quantity, price, brokerRealisedPnl: null, charges: null, taxes: null, raw: row, sourceEndpoint: result.endpoint };
         }, today, today, "SUCCESS");
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
