@@ -641,6 +641,127 @@ function createServer(
 
 
   // ==========================================================
+  // HISTORICAL P&L LEDGER / RECONCILIATION AUDIT
+  // ==========================================================
+  server.registerTool(
+    "update_pnl",
+    {
+      description: "Refresh the Historical P&L report and persist a reconciliation audit in ZERODHA_TOKEN_STORE. Keeps the authoritative consolidated baseline unchanged unless closed-trade activity is fully verified. Explicitly flags incomplete broker tradebook coverage; never treats open-position MTM as realised P&L. Read-only broker APIs; only ledger/audit metadata is written.",
+    },
+    async () => {
+      const now = new Date();
+      const dateKey = now.toISOString().slice(0, 10);
+      const auditKey = `pnl:reconciliation:audit:${dateKey}`;
+      const baselineKey = "pnl:historical:consolidated-baseline:v1";
+      const baseline = {
+        currency: "INR",
+        unit: "lakh",
+        source: "user-authoritative-baseline",
+        years: [
+          { fy: "2020-21", gross: -0.86, charges_taxes: -0.16, interest: -0.52, income_tax: 0.00, net: -1.54 },
+          { fy: "2021-22", gross: 0.09, charges_taxes: -0.50, interest: -0.07, income_tax: 0.00, net: -0.48 },
+          { fy: "2022-23", gross: 15.01, charges_taxes: -0.79, interest: -0.08, income_tax: -3.54, net: 10.61 },
+          { fy: "2023-24", gross: -14.35, charges_taxes: -0.82, interest: 0.25, income_tax: 0.00, net: -14.92 },
+          { fy: "2024-25", gross: 9.24, charges_taxes: -0.31, interest: -5.07, income_tax: -0.97, net: 2.90 },
+          { fy: "2025-26", gross: 0.30, charges_taxes: -4.55, interest: -7.48, income_tax: 0.00, net: -11.73 },
+          { fy: "2026-27", gross: 11.87, charges_taxes: -6.83, interest: -4.86, income_tax: -0.04, net: 0.13 },
+        ],
+        totals: { gross: 21.30, charges_taxes: -13.96, interest: -17.83, income_tax: -4.54, net: -15.04 },
+        note: "Preserve supplied totals exactly; do not force broker-level totals to reconcile to consolidated totals.",
+      };
+      const issues: string[] = [];
+      let storageStatus = "UNAVAILABLE";
+      let baselineStatus = "NOT_PERSISTED";
+      let previousAudit: any = null;
+      if (!env.ZERODHA_TOKEN_STORE) {
+        issues.push("ZERODHA_TOKEN_STORE is not bound; persistent P&L ledger writes are unavailable.");
+      } else {
+        try {
+          const storedBaseline = await env.ZERODHA_TOKEN_STORE.get(baselineKey, "json");
+          if (storedBaseline && typeof storedBaseline === "object") {
+            baselineStatus = "EXISTING";
+          } else {
+            await env.ZERODHA_TOKEN_STORE.put(baselineKey, JSON.stringify(baseline));
+            baselineStatus = "INITIALIZED";
+          }
+          previousAudit = await env.ZERODHA_TOKEN_STORE.get(auditKey, "json");
+          storageStatus = "KV_WRITE_AVAILABLE";
+        } catch (error) {
+          issues.push("KV persistence failed: " + (error instanceof Error ? error.message : String(error)));
+        }
+      }
+      // Broker position endpoints do not constitute a complete closed-trade ledger.
+      // Do not post zero as a confirmed result and do not alter historical totals.
+      issues.push("Closed-trade activity has not been fully reconciled from transaction-level tradebooks across all five brokers.");
+      issues.push("Broker-specific charges/taxes and interest for new activity are not yet verified from source records.");
+      const audit = {
+        report_date: dateKey,
+        generated_at: now.toISOString(),
+        status: "RECONCILIATION_REQUIRED",
+        storage_status: storageStatus,
+        baseline_status: baselineStatus,
+        confirmed_today_realised_pnl: null,
+        confirmed_week_realised_pnl: null,
+        confirmed_month_realised_pnl: null,
+        confirmed_fy_realised_pnl: null,
+        confirmed_all_time_realised_pnl: null,
+        open_position_mtm_included: false,
+        historical_baseline_modified: false,
+        previous_run_for_date_exists: previousAudit !== null,
+        issues,
+      };
+      if (env.ZERODHA_TOKEN_STORE && storageStatus === "KV_WRITE_AVAILABLE") {
+        try {
+          await env.ZERODHA_TOKEN_STORE.put(auditKey, JSON.stringify(audit), { expirationTtl: 60 * 60 * 24 * 400 });
+          await env.ZERODHA_TOKEN_STORE.put("pnl:reconciliation:last-run", JSON.stringify(audit), { expirationTtl: 60 * 60 * 24 * 400 });
+        } catch (error) {
+          audit.status = "PERSISTENCE_FAILED";
+          audit.issues.push("Could not persist this reconciliation audit: " + (error instanceof Error ? error.message : String(error)));
+        }
+      }
+      const yearlyRows = baseline.years.filter((y) => y.fy !== "2020-21").map((y) =>
+        `| ${y.fy.replace("-", "–")} | ${y.gross.toFixed(2)} | ${y.charges_taxes.toFixed(2)} | ${y.interest.toFixed(2)} | ${y.income_tax.toFixed(2)} | ${y.net.toFixed(2)} |`
+      ).join("\n");
+      const report = [
+        "# Update P/L — " + dateKey,
+        "",
+        "**Status: " + audit.status + "**",
+        "",
+        "Historical baseline: " + baselineStatus + ". Audit persistence: " + storageStatus + ".",
+        "Today's realised P&L is **unconfirmed**, not zero: the current broker tools do not yet provide complete transaction-level closed-trade reconciliation across all five brokers.",
+        "",
+        "## Table 1 — P&L Summary (₹ lakh)",
+        "",
+        "| Broker | Today | This Week | This Month | FY 2026–27 | All Time |",
+        "|---|---:|---:|---:|---:|---:|",
+        "| Zerodha | — | — | — | 4.68* | 4.51* |",
+        "| AngelOne | — | — | — | 8.57* | 22.33* |",
+        "| Groww | — | — | — | 1.37* | 1.37* |",
+        "| 5Paisa | — | — | — | -3.02* | -7.18* |",
+        "| m.Stock | — | — | — | 0.27* | 0.27* |",
+        "| **Consolidated baseline** | **—** | **—** | **—** | **11.87** | **21.30** |",
+        "",
+        "*Broker figures are the previously recorded broker-level baseline and are not newly recalculated. Consolidated figures are maintained separately.",
+        "",
+        "## Table 2 — Yearly Summary (₹ lakh)",
+        "",
+        "| FY | Gross P&L | Charges & Taxes | Interest | Income Tax | Net P&L |",
+        "|---|---:|---:|---:|---:|---:|",
+        yearlyRows,
+        `| **TOTAL** | **${baseline.totals.gross.toFixed(2)}** | **${baseline.totals.charges_taxes.toFixed(2)}** | **${baseline.totals.interest.toFixed(2)}** | **${baseline.totals.income_tax.toFixed(2)}** | **${baseline.totals.net.toFixed(2)}** |`,
+        "",
+        "## Validation",
+        "- Open-position MTM excluded.",
+        "- Historical baseline unchanged.",
+        "- No new realised P&L posted without transaction-level verification.",
+        "- Charges/taxes/interest for new activity remain unverified.",
+        "- Issues: " + issues.join(" "),
+      ].join("\n");
+      return { content: [{ type: "text", text: report }] };
+    }
+  );
+
+  // ==========================================================
   // CONSOLIDATED INVESTMENTS
   // ==========================================================
   server.registerTool(
