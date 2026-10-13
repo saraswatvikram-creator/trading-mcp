@@ -97,6 +97,12 @@ async function postForm(path: string, body: Record<string, string>) {
     data = JSON.parse(text);
   } catch {
     const preview = text.replace(/\s+/g, " ").slice(0, 180);
+    if (response.status === 403 && /ACCESS DENIED/i.test(text)) {
+      const deniedIp = text.match(/Your IP:\\s*([0-9a-f:.]+)/i)?.[1] ?? "unknown";
+      throw new Error(
+        `MSTOCK_IP_ACCESS_DENIED: m.Stock denied the request from egress IP ${deniedIp}. Cloudflare Worker outbound IPs are not fixed; use a stable egress IP accepted by m.Stock.`
+      );
+    }
     throw new Error(`MSTOCK_API_ERROR: Non-JSON response (HTTP ${response.status}) from ${path}: ${preview}`);
   }
 
@@ -129,6 +135,12 @@ async function get(path: string, apiKey: string, accessToken: string) {
     data = JSON.parse(text);
   } catch {
     const preview = text.replace(/\s+/g, " ").slice(0, 180);
+    if (response.status === 403 && /ACCESS DENIED/i.test(text)) {
+      const deniedIp = text.match(/Your IP:\\s*([0-9a-f:.]+)/i)?.[1] ?? "unknown";
+      throw new Error(
+        `MSTOCK_IP_ACCESS_DENIED: m.Stock denied the request from egress IP ${deniedIp}. Cloudflare Worker outbound IPs are not fixed; use a stable egress IP accepted by m.Stock.`
+      );
+    }
     throw new Error(`MSTOCK_API_ERROR: Non-JSON response (HTTP ${response.status}) from ${path}: ${preview}`);
   }
 
