@@ -484,25 +484,37 @@ async function getZerodhaInvestmentHoldings(env: Env): Promise<any> {
   const response = await zerodhaGet("/portfolio/holdings", env) as any;
   const rows = Array.isArray(response?.data) ? response.data : [];
   const equity = rows.map((r: any) => {
-    const quantity = Number(r?.quantity ?? 0);
+    // Kite reports settled and T+1 quantities separately. Include both when
+    // valuing the holding, otherwise ETFs in T+1 settlement can appear as zero.
+    const settledQuantity = Number(r?.quantity ?? 0);
+    const t1Quantity = Number(r?.t1_quantity ?? 0);
+    const quantity = settledQuantity + t1Quantity;
     const average = Number(r?.average_price);
     const ltp = Number(r?.last_price);
     const investmentValue = Number.isFinite(average) ? average * quantity : null;
     const currentValue = Number.isFinite(ltp) ? ltp * quantity : null;
-    const brokerPnl = Number(r?.pnl);
-    const pnl = Number.isFinite(brokerPnl) ? brokerPnl : investmentValue !== null && currentValue !== null ? currentValue - investmentValue : null;
+    const computedPnl = investmentValue !== null && currentValue !== null
+      ? currentValue - investmentValue
+      : null;
+    const brokerPnl = r?.pnl !== null && r?.pnl !== undefined && r?.pnl !== ""
+      ? Number(r.pnl)
+      : null;
+    const pnl = computedPnl !== null ? computedPnl : (brokerPnl !== null && Number.isFinite(brokerPnl) ? brokerPnl : null);
     return {
-      asset_class: "Equity",
+      asset_class: "ETF / Equity",
       symbol: r?.tradingsymbol ?? null,
       exchange: r?.exchange ?? null,
       isin: r?.isin ?? null,
       quantity,
+      settled_quantity: settledQuantity,
+      t1_quantity: t1Quantity,
       average_price: Number.isFinite(average) ? average : null,
       ltp: Number.isFinite(ltp) ? ltp : null,
       investment_value: investmentValue,
       current_value: currentValue,
       pnl,
       pnl_percent: pnl !== null && investmentValue ? (pnl / investmentValue) * 100 : null,
+      source: "Zerodha Kite /portfolio/holdings",
     };
   });
 
@@ -514,7 +526,17 @@ async function getZerodhaInvestmentHoldings(env: Env): Promise<any> {
     const ltp = Number(r?.last_price);
     const investmentValue = Number.isFinite(average) ? average * quantity : null;
     const currentValue = Number.isFinite(ltp) ? ltp * quantity : null;
-    const pnl = Number.isFinite(Number(r?.pnl)) ? Number(r.pnl) : investmentValue !== null && currentValue !== null ? currentValue - investmentValue : null;
+    // Kite MF holdings can report pnl=0 even while average NAV and latest NAV
+    // differ. Prefer a computed cost-basis P&L when both values are available.
+    const computedPnl = investmentValue !== null && currentValue !== null
+      ? currentValue - investmentValue
+      : null;
+    const reportedPnl = r?.pnl !== null && r?.pnl !== undefined && r?.pnl !== ""
+      ? Number(r.pnl)
+      : null;
+    const pnl = computedPnl !== null
+      ? computedPnl
+      : (reportedPnl !== null && Number.isFinite(reportedPnl) ? reportedPnl : null);
     return {
       asset_class: "Mutual Fund",
       fund: r?.fund ?? null,
@@ -528,18 +550,43 @@ async function getZerodhaInvestmentHoldings(env: Env): Promise<any> {
       current_value: currentValue,
       pnl,
       pnl_percent: pnl !== null && investmentValue ? (pnl / investmentValue) * 100 : null,
+      source: "Zerodha Kite Connect /mf/holdings",
     };
   });
 
   const holdings = [...equity, ...mutualFunds];
-  const summary = holdings.reduce((s: any, h: any) => {
+  const sumValues = (items: any[]) => items.reduce((s: any, h: any) => {
     if (Number.isFinite(h.investment_value)) s.investment_value += h.investment_value;
     if (Number.isFinite(h.current_value)) s.current_value += h.current_value;
     return s;
   }, { investment_value: 0, current_value: 0 });
+  const summary = sumValues(holdings);
   summary.pnl = summary.current_value - summary.investment_value;
   summary.pnl_percent = summary.investment_value ? (summary.pnl / summary.investment_value) * 100 : null;
-  return { authenticated: true, broker: "Zerodha", holdings, summary, read_only: true };
+  const by_asset_class = {
+    "ETF / Equity": { ...sumValues(equity), holding_count: equity.length },
+    "Mutual Fund": { ...sumValues(mutualFunds), holding_count: mutualFunds.length },
+  };
+  for (const bucket of Object.values(by_asset_class) as any[]) {
+    bucket.pnl = bucket.current_value - bucket.investment_value;
+    bucket.pnl_percent = bucket.investment_value ? (bucket.pnl / bucket.investment_value) * 100 : null;
+  }
+  return {
+    authenticated: true,
+    broker: "Zerodha",
+    holdings,
+    summary,
+    by_asset_class,
+    sources: {
+      equity_etfs: "Zerodha Kite /portfolio/holdings",
+      mutual_funds: "Zerodha Kite Connect /mf/holdings (Coin-related MF holdings endpoint; may not exactly match Coin UI NAV timing)",
+    },
+    reconciliation: {
+      status: "API_DATA_ONLY",
+      note: "Coin UI is not independently queried by this worker. Kite ETF/equity and mutual-fund endpoint values are combined; verify against Coin UI if NAV timing or fund-level valuation differs.",
+    },
+    read_only: true,
+  };
 }
 
 async function getZerodhaMargin(env: Env): Promise<any> {
