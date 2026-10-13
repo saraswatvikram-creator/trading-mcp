@@ -496,6 +496,37 @@ export async function getGrowwHoldings(env: GrowwEnv): Promise<any> {
 }
 
 
+export async function getGrowwMargin(env: GrowwEnv): Promise<any> {
+  const result = await growwGetWithAutoRefresh("/v1/margins/detail/user", env);
+  const response = result.data;
+  const margin = response?.payload ?? response;
+  const fno = margin?.fno_margin_details ?? {};
+  const numeric = (value: any): number | null =>
+    value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))
+      ? Number(value)
+      : null;
+
+  return {
+    status: "LIVE",
+    broker: "Groww",
+    available_for_options: numeric(fno.option_sell_balance_available),
+    available_for_options_source_field: "fno_margin_details.option_sell_balance_available",
+    clear_cash: numeric(margin?.clear_cash),
+    collateral_available: numeric(margin?.collateral_available),
+    collateral_used: numeric(margin?.collateral_used),
+    net_margin_used: numeric(margin?.net_margin_used),
+    span_margin_used: numeric(fno.span_margin_used),
+    exposure_margin_used: numeric(fno.exposure_margin_used),
+    option_buy_balance_available: numeric(fno.option_buy_balance_available),
+    future_balance_available: numeric(fno.future_balance_available),
+    token_expiry: result.expiry,
+    source: "Groww /v1/margins/detail/user",
+    as_of: new Date().toISOString(),
+    raw: margin,
+    read_only: true,
+  };
+}
+
 export function registerGrowwTools(server: any, env: GrowwEnv): void {
   server.registerTool(
     "groww_auth_status",
