@@ -64,6 +64,23 @@ Do not put the API key or TOTP secret in ChatGPT messages.
 - API key and TOTP secret remain Cloudflare Worker secrets.
 - Access tokens remain in the existing KV namespace under `mstock_*` keys.
 
+## Consolidated investment margin
+
+Every **Update Investments** call refreshes margin data alongside the five broker holdings feeds. This is live-on-demand refresh, not a background polling schedule.
+
+The response adds `margin_summary` with one row per broker, broker-reported available margin/funds for options, the source field, available cash/balance, collateral, utilisation, source, timestamp and per-broker status.
+
+Read-only sources:
+- Zerodha Kite `GET /user/margins` (equity segment `net` and collateral/utilisation components)
+- Angel One SmartAPI `GET /rest/secure/angelbroking/user/v1/getRMS`
+- Groww `GET /v1/margins/detail/user` (F&O option-sell available balance)
+- 5Paisa Xstream `POST /V4/Margin` (`EquityMargin[0].NetAvailableMargin`)
+- m.Stock Type A `GET /openapi/typea/user/fundsummary`
+
+Margin failures are independent of holdings failures: a broker margin API error marks that row as ERROR and does not suppress the investments table. The consolidated available-for-options total is returned only when all five brokers have a live response and a numeric available field; otherwise the total is null rather than being estimated from collateral. The response retains each broker's source field because the brokers do not use identical field names or definitions.
+
+Additional read-only tools: `angelone_margin`, `groww_margin`, `fivepaisa_margin`, and `mstock_margin`; `zerodha_margins` remains available.
+
 ## Daily Trading Desk authentication
 
 The preferred first command each trading day is:
