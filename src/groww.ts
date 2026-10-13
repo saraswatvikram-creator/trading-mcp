@@ -419,6 +419,28 @@ function dashboardSummary(
   ].join("\n");
 }
 
+export async function getGrowwTradesForLedger(env: GrowwEnv): Promise<{ trades: any[]; endpoint: string; ordersSeen: number }> {
+  const trades: any[] = [];
+  let ordersSeen = 0;
+  const endpoint = "GET /v1/order/list?segment=FNO&page={n}&page_size=100 + GET /v1/order/trades/{groww_order_id}?segment=FNO";
+  for (let page = 0; page < 10; page++) {
+    const orderResult = await growwGetWithAutoRefresh(`/v1/order/list?segment=FNO&page=${page}&page_size=100`, env);
+    const orders = Array.isArray(orderResult.data?.payload?.order_list) ? orderResult.data.payload.order_list : [];
+    ordersSeen += orders.length;
+    for (const order of orders) {
+      const orderId = order?.groww_order_id;
+      if (!orderId || Number(order?.filled_quantity ?? 0) <= 0) continue;
+      const tradeResult = await growwGetWithAutoRefresh(
+        `/v1/order/trades/${encodeURIComponent(String(orderId))}?segment=FNO&page=0&page_size=50`, env
+      );
+      const rows = Array.isArray(tradeResult.data?.payload?.trade_list) ? tradeResult.data.payload.trade_list : [];
+      trades.push(...rows);
+    }
+    if (orders.length < 100) break;
+  }
+  return { trades, endpoint, ordersSeen };
+}
+
 export async function getGrowwHoldings(env: GrowwEnv): Promise<any> {
   const result = await growwGetWithAutoRefresh("/v1/holdings/user", env);
   const token = result;
