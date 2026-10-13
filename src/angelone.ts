@@ -96,7 +96,13 @@ async function angelOneLogin(env: AngelOneEnv): Promise<any> {
     }),
   });
 
-  const data = await response.json();
+  const responseText = await response.text();
+  let data: any;
+  try {
+    data = JSON.parse(responseText);
+  } catch {
+    throw new Error("AngelOne authentication returned non-JSON HTTP " + response.status + ": " + responseText.replace(/\s+/g, " ").slice(0, 180));
+  }
   if (!response.ok || data?.status === false) {
     throw new Error("AngelOne authentication failed: " + JSON.stringify(data));
   }
@@ -120,19 +126,45 @@ async function angelOneGet(url: string, env: AngelOneEnv, jwtToken: string): Pro
       Authorization: "Bearer " + jwtToken,
     },
   });
-  const data = await response.json();
+  const responseText = await response.text();
+  let data: any;
+  try {
+    data = JSON.parse(responseText);
+  } catch {
+    throw new Error("AngelOne API returned non-JSON HTTP " + response.status + ": " + responseText.replace(/\s+/g, " ").slice(0, 180));
+  }
   if (!response.ok || data?.status === false) {
     throw new Error("AngelOne API error " + response.status + ": " + JSON.stringify(data));
   }
   return data;
 }
 
-export async function getAngelOneHoldings(env: AngelOneEnv): Promise<any> {
+export async function getAngelOneHoldings(env: AngelOneEnv, includeMargin = false): Promise<any> {
   const login = await angelOneLogin(env);
   const holdings = await angelOneGet(ANGELONE_ALL_HOLDING_URL, env, login.jwtToken);
   const data = holdings?.data ?? {};
   const rows = Array.isArray(data?.holdings) ? data.holdings : [];
   const total = data?.totalholding ?? {};
+
+  // The consolidated Investments refresh can request RMS in this same
+  // authenticated session, avoiding a second login against Angel One's
+  // tightly rate-limited login endpoint.
+  let margin: any = null;
+  if (includeMargin) {
+    try {
+      const rms = await angelOneGet(ANGELONE_RMS_URL, env, login.jwtToken);
+      margin = normalizeAngelOneMargin(rms?.data ?? {});
+    } catch (error) {
+      margin = {
+        status: "ERROR",
+        broker: "Angel One",
+        error: error instanceof Error ? error.message : String(error),
+        source: "Angel One SmartAPI getRMS",
+        as_of: new Date().toISOString(),
+        read_only: true,
+      };
+    }
+  }
 
   return {
     authenticated: true,
@@ -159,17 +191,14 @@ export async function getAngelOneHoldings(env: AngelOneEnv): Promise<any> {
       pnl: Number.isFinite(Number(total?.totalprofitandloss)) ? Number(total.totalprofitandloss) : null,
       pnl_percent: Number.isFinite(Number(total?.totalpnlpercentage)) ? Number(total.totalpnlpercentage) : null,
     },
+    ...(includeMargin ? { margin } : {}),
     source: "Angel One SmartAPI getAllHolding",
     read_only: true,
   };
 }
 
 
-export async function getAngelOneMargin(env: AngelOneEnv): Promise<any> {
-  const login = await angelOneLogin(env);
-  const response = await angelOneGet(ANGELONE_RMS_URL, env, login.jwtToken);
-  const data = response?.data ?? {};
-
+function normalizeAngelOneMargin(data: any): any {
   const numeric = (...keys: string[]): number | null => {
     for (const key of keys) {
       const value = data?.[key];
@@ -180,14 +209,13 @@ export async function getAngelOneMargin(env: AngelOneEnv): Promise<any> {
     return null;
   };
 
-  const net = numeric("net");
   const availableField = ["net", "availablelimitmargin"].find((key) => numeric(key) !== null) ?? null;
   return {
     status: "LIVE",
     broker: "Angel One",
     available_for_options: availableField ? numeric(availableField) : null,
     available_for_options_source_field: availableField,
-    net_available_margin: net,
+    net_available_margin: numeric("net"),
     available_cash: numeric("availablecash"),
     available_limit_margin: numeric("availablelimitmargin"),
     collateral: numeric("collateral"),
@@ -203,6 +231,13 @@ export async function getAngelOneMargin(env: AngelOneEnv): Promise<any> {
     read_only: true,
   };
 }
+
+export async function getAngelOneMargin(env: AngelOneEnv): Promise<any> {
+  const login = await angelOneLogin(env);
+  const response = await angelOneGet(ANGELONE_RMS_URL, env, login.jwtToken);
+  return normalizeAngelOneMargin(response?.data ?? {});
+}
+
 
 export function registerAngelOneTools(server: any, env: AngelOneEnv): void {
 

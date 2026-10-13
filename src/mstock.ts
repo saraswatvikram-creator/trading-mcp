@@ -96,7 +96,8 @@ async function postForm(path: string, body: Record<string, string>) {
   try {
     data = JSON.parse(text);
   } catch {
-    throw new Error(`MSTOCK_API_ERROR: Non-JSON response (HTTP ${response.status}).`);
+    const preview = text.replace(/\s+/g, " ").slice(0, 180);
+    throw new Error(`MSTOCK_API_ERROR: Non-JSON response (HTTP ${response.status}) from ${path}: ${preview}`);
   }
 
   const status = String(data?.status ?? "").toLowerCase();
@@ -127,7 +128,8 @@ async function get(path: string, apiKey: string, accessToken: string) {
   try {
     data = JSON.parse(text);
   } catch {
-    throw new Error(`MSTOCK_API_ERROR: Non-JSON response (HTTP ${response.status}).`);
+    const preview = text.replace(/\s+/g, " ").slice(0, 180);
+    throw new Error(`MSTOCK_API_ERROR: Non-JSON response (HTTP ${response.status}) from ${path}: ${preview}`);
   }
 
   const status = String(data?.status ?? "").toLowerCase();
