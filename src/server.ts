@@ -780,8 +780,15 @@ function createServer(
       };
       const toIso = (value: unknown): string | null => {
         if (typeof value !== "string" || !value.trim()) return null;
-        const parsed = new Date(value);
-        return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+        const text = value.trim();
+        const parsed = new Date(text);
+        if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+        const local = text.match(/^(\\d{2})-(\\d{2})-(\\d{4})[ T](\\d{2}:\\d{2}:\\d{2})$/);
+        if (local) {
+          const indiaTime = new Date(local[3] + "-" + local[2] + "-" + local[1] + "T" + local[4] + "+05:30");
+          return Number.isNaN(indiaTime.getTime()) ? null : indiaTime.toISOString();
+        }
+        return null;
       };
       const ingest = async (
         broker: PnlBroker,
@@ -821,7 +828,7 @@ function createServer(
           if (!executionId || !side || !quantity || !price || !tradeTime || !row?.tradingsymbol) return null;
           return {
             broker: "Zerodha", executionId, orderId: row?.order_id == null ? null : String(row.order_id),
-            exchangeOrderId: row?.exchange_order_id == null ? null : String(row.exchange_order_id),
+            exchangeOrderId: row?.exchange_order_id == null && row?.EXCH_ORDER_NUMBER == null ? null : String(row?.exchange_order_id ?? row?.EXCH_ORDER_NUMBER),
             tradeTime, tradingSymbol: String(row.tradingsymbol), exchange: row?.exchange ?? null,
             segment: row?.instrument_token ? String(row.instrument_token) : row?.product ?? null,
             side, quantity, price, brokerRealisedPnl: null, charges: null, taxes: null,
@@ -901,15 +908,15 @@ function createServer(
       try {
         const result = await getMStockTradesForLedger(env);
         await ingest("m.Stock", result.trades, result.endpoint, (row) => {
-          const id = row?.trade_id ?? row?.tradeid ?? row?.trade_no ?? row?.fill_id ?? row?.exchange_trade_id;
+          const id = row?.trade_id ?? row?.tradeid ?? row?.trade_no ?? row?.fill_id ?? row?.exchange_trade_id ?? row?.TRADE_NUMBER;
           const executionId = id == null ? null : String(id);
-          const side = normalizeSide(row?.transaction_type ?? row?.transactiontype ?? row?.buy_sell);
-          const quantity = toNumber(row?.quantity, row?.traded_quantity, row?.fill_quantity);
-          const price = toNumber(row?.price, row?.trade_price, row?.average_price);
-          const tradeTime = toIso(row?.trade_time ?? row?.trade_date_time ?? row?.trade_date ?? row?.filltime ?? row?.order_timestamp);
-          const symbol = row?.trading_symbol ?? row?.tradingsymbol ?? row?.symbol;
+          const side = normalizeSide(row?.transaction_type ?? row?.transactiontype ?? row?.buy_sell ?? row?.BUY_SELL);
+          const quantity = toNumber(row?.quantity, row?.traded_quantity, row?.fill_quantity, row?.QUANTITY);
+          const price = toNumber(row?.price, row?.trade_price, row?.average_price, row?.PRICE);
+          const tradeTime = toIso(row?.trade_time ?? row?.trade_date_time ?? row?.trade_date ?? row?.filltime ?? row?.order_timestamp ?? row?.ORDER_DATE_TIME);
+          const symbol = row?.trading_symbol ?? row?.tradingsymbol ?? row?.symbol ?? row?.SYMBOL;
           if (!executionId || !side || !quantity || price === null || !tradeTime || !symbol) return null;
-          return { broker: "m.Stock", executionId, orderId: row?.order_id == null && row?.orderid == null ? null : String(row?.order_id ?? row?.orderid), exchangeOrderId: row?.exchange_order_id == null ? null : String(row.exchange_order_id), tradeTime, tradingSymbol: String(symbol), exchange: row?.exchange ?? null, segment: row?.segment ?? row?.product ?? null, side, quantity, price, brokerRealisedPnl: null, charges: null, taxes: null, raw: row, sourceEndpoint: result.endpoint };
+          return { broker: "m.Stock", executionId, orderId: row?.order_id == null && row?.orderid == null && row?.ORDER_NUMBER == null ? null : String(row?.order_id ?? row?.orderid ?? row?.ORDER_NUMBER), exchangeOrderId: row?.exchange_order_id == null ? null : String(row.exchange_order_id), tradeTime, tradingSymbol: String(symbol), exchange: row?.exchange ?? row?.EXCHANGE ?? null, segment: row?.segment ?? row?.product ?? row?.SEGMENT ?? null, side, quantity, price, brokerRealisedPnl: null, charges: null, taxes: null, raw: row, sourceEndpoint: result.endpoint };
         }, today, today, "SUCCESS");
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
