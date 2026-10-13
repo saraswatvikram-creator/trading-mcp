@@ -8,6 +8,14 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/mcp", "/login", "/callback", "/auth/*", "/fivepaisa/callback"]
   },
+  "d1_databases": [
+    {
+      "binding": "PNL_DB",
+      "database_name": "trading-pnl",
+      "database_id": "77fead4f-480c-4768-a7a8-5e0c04c0b979",
+      "migrations_dir": "migrations"
+    }
+  ],
   "kv_namespaces": [
     {
       "binding": "ZERODHA_TOKEN_STORE",
