@@ -181,10 +181,12 @@ export async function getAngelOneMargin(env: AngelOneEnv): Promise<any> {
   };
 
   const net = numeric("net");
+  const availableField = ["net", "availablelimitmargin"].find((key) => numeric(key) !== null) ?? null;
   return {
     status: "LIVE",
     broker: "Angel One",
-    available_for_options: net,
+    available_for_options: availableField ? numeric(availableField) : null,
+    available_for_options_source_field: availableField,
     net_available_margin: net,
     available_cash: numeric("availablecash"),
     available_limit_margin: numeric("availablelimitmargin"),
