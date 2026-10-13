@@ -101,7 +101,7 @@ async function angelOneLogin(env: AngelOneEnv): Promise<any> {
   try {
     data = JSON.parse(responseText);
   } catch {
-    throw new Error("AngelOne authentication returned non-JSON HTTP " + response.status + ": " + responseText.replace(/\\s+/g, " ").slice(0, 180));
+    throw new Error("AngelOne authentication returned non-JSON HTTP " + response.status + ": " + responseText.replace(/\s+/g, " ").slice(0, 180));
   }
   if (!response.ok || data?.status === false) {
     throw new Error("AngelOne authentication failed: " + JSON.stringify(data));
@@ -131,7 +131,7 @@ async function angelOneGet(url: string, env: AngelOneEnv, jwtToken: string): Pro
   try {
     data = JSON.parse(responseText);
   } catch {
-    throw new Error("AngelOne API returned non-JSON HTTP " + response.status + ": " + responseText.replace(/\\s+/g, " ").slice(0, 180));
+    throw new Error("AngelOne API returned non-JSON HTTP " + response.status + ": " + responseText.replace(/\s+/g, " ").slice(0, 180));
   }
   if (!response.ok || data?.status === false) {
     throw new Error("AngelOne API error " + response.status + ": " + JSON.stringify(data));
