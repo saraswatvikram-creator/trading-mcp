@@ -2,11 +2,11 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { registerAngelOneTools, getAngelOneHoldings, getAngelOneMargin } from "./angelone";
 import { registerGrowwTools, getGrowwHoldings, getGrowwMargin } from "./groww";
 import { registerMStockTools, getMStockHoldings, getMStockMargin } from "./mstock";
-import { registerFivePaisaTools, handleFivePaisaCallback, getFivePaisaHoldings, getFivePaisaMargin } from "./fivepaisa";
+import { registerFivePaisaTools, handleFivePaisaCallback, getFivePaisaHoldings, getFivePaisaMargin, getFivePaisaTradesForLedger } from "./fivepaisa";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 import { runUpdateAuth, handleAuthRoute } from "./auth";
-import { getLedgerCoverage } from "./pnl-ledger";
+import { getLedgerCoverage, persistExecutions, type PnlExecution, type PnlBroker } from "./pnl-ledger";
 
 type Env = {
   ZERODHA_API_KEY: string;
@@ -746,6 +746,134 @@ function createServer(
       } catch (error) {
         return { content: [{ type: "text", text: "INITIALIZATION FAILED: " + (error instanceof Error ? error.message : String(error)) }] };
       }
+    }
+  );
+
+  // ==========================================================
+  // DURABLE P&L EXECUTION INGESTION
+  // ==========================================================
+  server.registerTool(
+    "pnl_ingest_executions",
+    {
+      description: "Read-only, duplicate-safe ingestion of broker execution records into D1. Currently ingests Zerodha's current-day /trades response and 5Paisa's TradeBook response. Explicitly marks the other three brokers as NOT_INGESTED; does not infer realised P&L from positions or orders.",
+    },
+    async () => {
+      if (!env.PNL_DB) {
+        return { content: [{ type: "text", text: "BLOCKED: PNL_DB binding missing. No executions ingested." }] };
+      }
+      const startedAt = new Date().toISOString();
+      const outcomes: any[] = [];
+      const today = startedAt.slice(0, 10);
+      const baseUrl = new URL("https://trading-mcp.saraswat-vikram.workers.dev").origin;
+
+      const normalizeSide = (value: unknown): "BUY" | "SELL" | null => {
+        const v = String(value ?? "").trim().toUpperCase();
+        if (["BUY", "B", "1"].includes(v)) return "BUY";
+        if (["SELL", "S", "2"].includes(v)) return "SELL";
+        return null;
+      };
+      const toNumber = (...values: unknown[]): number | null => {
+        for (const value of values) {
+          if (value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))) return Number(value);
+        }
+        return null;
+      };
+      const toIso = (value: unknown): string | null => {
+        if (typeof value !== "string" || !value.trim()) return null;
+        const parsed = new Date(value);
+        return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+      };
+      const ingest = async (
+        broker: PnlBroker,
+        rows: any[],
+        endpoint: string,
+        mapper: (row: any) => PnlExecution | null,
+        coverageStart: string | null,
+        coverageEnd: string | null,
+        sourceStatus: "SUCCESS" | "PARTIAL" = "SUCCESS",
+        sourceError?: string,
+      ) => {
+        const mapped: PnlExecution[] = [];
+        let rejected = 0;
+        for (const row of rows) {
+          const execution = mapper(row);
+          if (!execution) rejected++;
+          else mapped.push(execution);
+        }
+        const status = sourceStatus === "PARTIAL" || rejected > 0 ? "PARTIAL" : "SUCCESS";
+        const result = await persistExecutions(
+          env.PNL_DB!, broker, mapped, endpoint, coverageStart, coverageEnd,
+          startedAt, new Date().toISOString(), status,
+          [sourceError, rejected ? String(rejected) + " source rows rejected because stable execution ID or required execution fields were missing/unrecognised" : null].filter(Boolean).join("; ") || undefined,
+        );
+        outcomes.push({ ...result, sourceRowsRejected: rejected, coverageStart, coverageEnd, sourceEndpoint: endpoint });
+      };
+
+      try {
+        const response: any = await zerodhaGet("/trades", env);
+        const rows = Array.isArray(response?.data) ? response.data : [];
+        await ingest("Zerodha", rows, "Kite Connect GET /trades (current day only)", (row) => {
+          const executionId = row?.trade_id === undefined || row?.trade_id === null ? null : String(row.trade_id);
+          const side = normalizeSide(row?.transaction_type);
+          const quantity = toNumber(row?.quantity);
+          const price = toNumber(row?.price, row?.average_price);
+          const tradeTime = toIso(row?.exchange_timestamp ?? row?.fill_timestamp ?? row?.order_timestamp) ?? (row?.exchange_timestamp ? String(row.exchange_timestamp) : null);
+          if (!executionId || !side || !quantity || !price || !tradeTime || !row?.tradingsymbol) return null;
+          return {
+            broker: "Zerodha", executionId, orderId: row?.order_id == null ? null : String(row.order_id),
+            exchangeOrderId: row?.exchange_order_id == null ? null : String(row.exchange_order_id),
+            tradeTime, tradingSymbol: String(row.tradingsymbol), exchange: row?.exchange ?? null,
+            segment: row?.instrument_token ? String(row.instrument_token) : row?.product ?? null,
+            side, quantity, price, brokerRealisedPnl: null, charges: null, taxes: null,
+            raw: row, sourceEndpoint: "Kite Connect GET /trades (current day only)",
+          };
+        }, today, today, "SUCCESS");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await persistExecutions(env.PNL_DB, "Zerodha", [], "Kite Connect GET /trades (current day only)", today, today, startedAt, new Date().toISOString(), "FAILED", message);
+        outcomes.push({ broker: "Zerodha", status: "FAILED", error: message, recordsSeen: 0, recordsInserted: 0, recordsDuplicate: 0 });
+      }
+
+      try {
+        const result = await getFivePaisaTradesForLedger(env, baseUrl);
+        await ingest("5Paisa", result.trades, result.endpoint, (row) => {
+          const executionIdRaw = row?.ExchangeTradeID ?? row?.ExchangeTradeId ?? row?.TradeID ?? row?.TradeId ?? row?.TradeNo ?? row?.TradeNumber;
+          const executionId = executionIdRaw == null ? null : String(executionIdRaw);
+          const side = normalizeSide(row?.BuySell ?? row?.BuySellFlag ?? row?.TransactionType ?? row?.TrdType);
+          const quantity = toNumber(row?.TradeQty, row?.Qty, row?.Quantity, row?.TradedQty);
+          const price = toNumber(row?.TradeRate, row?.Rate, row?.Price, row?.TradePrice);
+          const timeValue = row?.ExchangeTradeTime ?? row?.TradeTime ?? row?.ExchangeTime ?? row?.OrderTime ?? row?.TrdTime;
+          const tradeTime = toIso(timeValue) ?? (typeof timeValue === "string" && timeValue.trim() ? timeValue : null);
+          const symbol = row?.ScripName ?? row?.Symbol ?? row?.TradingSymbol ?? row?.ScripCode;
+          if (!executionId || !side || !quantity || !price || !tradeTime || symbol == null) return null;
+          return {
+            broker: "5Paisa", executionId, orderId: row?.ExchOrderID == null && row?.OrderID == null ? null : String(row?.ExchOrderID ?? row?.OrderID),
+            exchangeOrderId: row?.ExchangeOrderID == null ? null : String(row.ExchangeOrderID),
+            tradeTime, tradingSymbol: String(symbol), exchange: row?.Exch ?? row?.Exchange ?? null,
+            segment: row?.ExchType ?? row?.Segment ?? null, side, quantity, price,
+            brokerRealisedPnl: null, charges: null, taxes: null, raw: row, sourceEndpoint: result.endpoint,
+          };
+        }, null, null, "SUCCESS", result.coverage);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await persistExecutions(env.PNL_DB, "5Paisa", [], "5Paisa POST /V1/TradeBook", null, null, startedAt, new Date().toISOString(), "FAILED", message);
+        outcomes.push({ broker: "5Paisa", status: "FAILED", error: message, recordsSeen: 0, recordsInserted: 0, recordsDuplicate: 0 });
+      }
+
+      for (const broker of ["AngelOne", "Groww", "m.Stock"]) {
+        outcomes.push({
+          broker, status: "NOT_INGESTED", recordsSeen: 0, recordsInserted: 0, recordsDuplicate: 0,
+          reason: "A transaction-level tradebook collector with verified field mapping is not yet implemented. Positions/orders are intentionally not substituted for executions.",
+        });
+      }
+      return { content: [{ type: "text", text: JSON.stringify({
+        status: outcomes.some((x) => x.status === "FAILED" || x.status === "PARTIAL" || x.status === "NOT_INGESTED") ? "PARTIAL" : "SUCCESS",
+        generatedAt: new Date().toISOString(),
+        duplicateProtection: "UNIQUE(broker, execution_id) + INSERT OR IGNORE in D1",
+        realisedPnl: "Not calculated from fills. Broker-reported realised P&L and fees are not populated by these endpoints; this is execution ingestion only.",
+        historicalBaselineChanged: false,
+        brokers: outcomes,
+      }, null, 2) }] };
     }
   );
 
