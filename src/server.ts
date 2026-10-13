@@ -651,7 +651,7 @@ function createServer(
     async () => {
       const results = await Promise.allSettled([
         getZerodhaInvestmentHoldings(env),
-        getAngelOneHoldings(env),
+        getAngelOneHoldings(env, true),
         getGrowwHoldings(env),
         getFivePaisaHoldings(env, baseUrl),
         getMStockHoldings(env),
@@ -660,9 +660,12 @@ function createServer(
       // Margin retrieval is independent of holdings: one margin API failure must
       // not suppress portfolio data. Run it after holdings so m.Stock can reuse
       // the session established by its holdings call where possible.
+      const angelOneMargin = results[1].status === "fulfilled"
+        ? (results[1].value as any)?.margin ?? null
+        : null;
       const marginResults = await Promise.allSettled([
         getZerodhaMargin(env),
-        getAngelOneMargin(env),
+        angelOneMargin ? Promise.resolve(angelOneMargin) : getAngelOneMargin(env),
         getGrowwMargin(env),
         getFivePaisaMargin(env, baseUrl),
         getMStockMargin(env),
