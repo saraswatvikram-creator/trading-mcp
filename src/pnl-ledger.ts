@@ -65,16 +65,13 @@ export async function persistExecutions(
     JSON.stringify(e.raw), e.sourceEndpoint || sourceEndpoint,
   ));
 
-  // Batch inserts are atomic within D1's batch transaction. Check total counts
-  // before/after to calculate inserts without relying on driver-specific changes.
-  const before = await db.prepare(
-    "SELECT COUNT(*) AS n FROM pnl_executions WHERE broker = ?"
-  ).bind(broker).first<{ n: number }>();
-  if (insertStatements.length) await db.batch(insertStatements);
-  const after = await db.prepare(
-    "SELECT COUNT(*) AS n FROM pnl_executions WHERE broker = ?"
-  ).bind(broker).first<{ n: number }>();
-  const recordsInserted = Math.max(0, Number(after?.n ?? 0) - Number(before?.n ?? 0));
+  // D1 batch is transactional. Use each INSERT's changes count rather than
+  // table counts, which can be distorted by simultaneous ingestion runs.
+  const insertResults = insertStatements.length ? await db.batch(insertStatements) : [];
+  const recordsInserted = insertResults.reduce(
+    (total, result) => total + Number((result as any)?.meta?.changes ?? 0),
+    0,
+  );
   const recordsSeen = executions.length;
   const recordsDuplicate = Math.max(0, recordsSeen - recordsInserted);
 
