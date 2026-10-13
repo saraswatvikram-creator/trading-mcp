@@ -385,7 +385,7 @@ export async function getMStockMargin(env: MStockEnv): Promise<any> {
   if (!token) throw new Error("MSTOCK_AUTH_REQUIRED: No m.Stock access token is stored.");
 
   const response = await get("/openapi/typea/user/fundsummary", apiKey, token);
-  const data = response?.data ?? response?.payload ?? response;
+  const data = Array.isArray(response?.data) ? response.data[0] ?? {} : response?.data ?? response?.payload ?? response;
   const numeric = (...keys: string[]): number | null => {
     for (const key of keys) {
       const value = data?.[key] ?? data?.[key.toLowerCase()];
