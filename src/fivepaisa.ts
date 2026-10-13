@@ -583,6 +583,46 @@ export async function getFivePaisaHoldings(env: FivePaisaEnv, baseUrl: string): 
 }
 
 
+export async function getFivePaisaMargin(env: FivePaisaEnv, baseUrl: string): Promise<any> {
+  requireFivePaisaConfig(env);
+  const session = await ensureFivePaisaSession(env, baseUrl);
+  if (!session.accessToken || !session.clientCode) {
+    throw new Error("5Paisa authentication is required before margin can be read.");
+  }
+
+  const response = await fivePaisaPost(env, "/V4/Margin", {});
+  const body = response?.body ?? {};
+  const equity = Array.isArray(body?.EquityMargin) ? body.EquityMargin[0] ?? {} : {};
+  const numeric = (...keys: string[]): number | null => {
+    for (const key of keys) {
+      const value = equity?.[key];
+      if (value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))) {
+        return Number(value);
+      }
+    }
+    return null;
+  };
+
+  return {
+    status: "LIVE",
+    broker: "5Paisa",
+    available_for_options: numeric("NetAvailableMargin"),
+    available_for_options_source_field: "EquityMargin[0].NetAvailableMargin",
+    ledger_balance: numeric("Ledgerbalance"),
+    margin_utilised: numeric("MarginUtilized"),
+    cash_margin_utilised: numeric("MarginUtilisedCash"),
+    collateral_after_haircut: numeric("CollateralValueAfterHairCut"),
+    mutual_fund_collateral_after_haircut: numeric("MFCollateralValueAfterHaircut"),
+    total_collateral: numeric("TotalCollateralValue"),
+    options_premium_utilised: numeric("OptionsPremium"),
+    token_expiry: session.tokenExpiry,
+    source: "5Paisa Xstream /V4/Margin",
+    as_of: new Date().toISOString(),
+    raw: body,
+    read_only: true,
+  };
+}
+
 export function registerFivePaisaTools(
   server: any,
   env: FivePaisaEnv,
@@ -636,6 +676,29 @@ export function registerFivePaisaTools(
           },
         ],
       };
+    }
+  );
+
+  server.registerTool(
+    "fivepaisa_margin",
+    {
+      description: "Read live 5Paisa available margin, collateral and utilisation from the V4 Margin API. Read-only.",
+    },
+    async () => {
+      try {
+        return {
+          content: [{ type: "text", text: JSON.stringify(await getFivePaisaMargin(env, baseUrl), null, 2) }],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({
+            status: "ERROR",
+            broker: "5Paisa",
+            error: error instanceof Error ? error.message : String(error),
+            read_only: true,
+          }, null, 2) }],
+        };
+      }
     }
   );
 

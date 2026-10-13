@@ -1,8 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/server";
-import { registerAngelOneTools, getAngelOneHoldings } from "./angelone";
-import { registerGrowwTools, getGrowwHoldings } from "./groww";
-import { registerMStockTools, getMStockHoldings } from "./mstock";
-import { registerFivePaisaTools, handleFivePaisaCallback, getFivePaisaHoldings } from "./fivepaisa";
+import { registerAngelOneTools, getAngelOneHoldings, getAngelOneMargin } from "./angelone";
+import { registerGrowwTools, getGrowwHoldings, getGrowwMargin } from "./groww";
+import { registerMStockTools, getMStockHoldings, getMStockMargin } from "./mstock";
+import { registerFivePaisaTools, handleFivePaisaCallback, getFivePaisaHoldings, getFivePaisaMargin } from "./fivepaisa";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 import { runUpdateAuth, handleAuthRoute } from "./auth";
@@ -542,6 +542,38 @@ async function getZerodhaInvestmentHoldings(env: Env): Promise<any> {
   return { authenticated: true, broker: "Zerodha", holdings, summary, read_only: true };
 }
 
+async function getZerodhaMargin(env: Env): Promise<any> {
+  const response = await zerodhaGet("/user/margins", env) as any;
+  const equity = response?.data?.equity ?? {};
+  const available = equity?.available ?? {};
+  const utilised = equity?.utilised ?? {};
+  const numeric = (value: any): number | null =>
+    value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))
+      ? Number(value)
+      : null;
+
+  return {
+    status: "LIVE",
+    broker: "Zerodha",
+    available_for_options: numeric(equity?.net),
+    available_for_options_source_field: "data.equity.net",
+    net_available_margin: numeric(equity?.net),
+    available_cash: numeric(available?.cash),
+    collateral: numeric(available?.collateral),
+    liquid_collateral_utilised: numeric(utilised?.liquid_collateral),
+    stock_collateral_utilised: numeric(utilised?.stock_collateral),
+    margin_utilised: numeric(utilised?.debits),
+    span_utilised: numeric(utilised?.span),
+    exposure_utilised: numeric(utilised?.exposure),
+    option_premium_utilised: numeric(utilised?.option_premium),
+    realised_mtm: numeric(utilised?.m2m_realised),
+    unrealised_mtm: numeric(utilised?.m2m_unrealised),
+    source: "Zerodha Kite /user/margins (equity segment)",
+    as_of: new Date().toISOString(),
+    read_only: true,
+  };
+}
+
 function createServer(
   env: Env,
   baseUrl: string
@@ -623,6 +655,17 @@ function createServer(
         getGrowwHoldings(env),
         getFivePaisaHoldings(env, baseUrl),
         getMStockHoldings(env),
+      ]);
+
+      // Margin retrieval is independent of holdings: one margin API failure must
+      // not suppress portfolio data. Run it after holdings so m.Stock can reuse
+      // the session established by its holdings call where possible.
+      const marginResults = await Promise.allSettled([
+        getZerodhaMargin(env),
+        getAngelOneMargin(env),
+        getGrowwMargin(env),
+        getFivePaisaMargin(env, baseUrl),
+        getMStockMargin(env),
       ]);
 
       const names = ["Zerodha", "Angel One", "Groww", "5Paisa", "m.Stock"];
@@ -720,6 +763,49 @@ function createServer(
           ? knownNewInvestments.reduce((s: number, b: any) => s + b.new_investment_since_last_update, 0)
           : null;
       total.pnl_percent = total.investment_value ? (total.pnl / total.investment_value) * 100 : null;
+
+      const marginBrokers = marginResults.map((r, i) => {
+        if (r.status === "fulfilled") {
+          const value: any = r.value;
+          const available = value?.available_for_options;
+          const availableNumber = available !== null && available !== undefined && Number.isFinite(Number(available))
+            ? Number(available)
+            : null;
+          return {
+            broker: names[i],
+            status: value?.status === "LIVE" && availableNumber !== null ? "LIVE" : "PARTIAL",
+            error: value?.status === "LIVE" ? null : (value?.error ?? value?.message ?? "Margin endpoint did not return a live available amount."),
+            available_for_options: availableNumber,
+            available_for_options_source_field: value?.available_for_options_source_field ?? null,
+            available_balance: value?.available_balance ?? value?.available_cash ?? value?.clear_cash ?? value?.ledger_balance ?? null,
+            collateral: value?.collateral ?? value?.collateral_available ?? value?.collateral_after_haircut ?? null,
+            margin_utilised: value?.margin_utilised ?? value?.net_margin_used ?? null,
+            option_premium_utilised: value?.option_premium_utilised ?? value?.options_premium_utilised ?? value?.option_buy_premium_utilised ?? null,
+            source: value?.source ?? null,
+            as_of: value?.as_of ?? new Date().toISOString(),
+          };
+        }
+        return {
+          broker: names[i],
+          status: "ERROR",
+          error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+          available_for_options: null,
+          available_for_options_source_field: null,
+          available_balance: null,
+          collateral: null,
+          margin_utilised: null,
+          option_premium_utilised: null,
+          source: null,
+          as_of: null,
+        };
+      });
+      const allMarginsLive = marginBrokers.length === names.length && marginBrokers.every(
+        (b) => b.status === "LIVE" && Number.isFinite(b.available_for_options)
+      );
+      const marginTotal = allMarginsLive
+        ? marginBrokers.reduce((sum, broker) => sum + Number(broker.available_for_options), 0)
+        : null;
+
       return {
         content: [{
           type: "text",
@@ -730,6 +816,14 @@ function createServer(
             scope: "Equity, ETFs as represented in equity holdings, and Zerodha Coin mutual funds.",
             authentication: brokers.map((b) => ({ broker: b.broker, status: b.status, error: b.error })),
             portfolio_summary: { brokers, total },
+            margin_summary: {
+              status: allMarginsLive ? "LIVE" : "PARTIAL",
+              definition: "Available margin/funds for options as reported by each broker's margin API. Source field is retained per broker. The total is shown only when all five APIs return a numeric available amount.",
+              brokers: marginBrokers,
+              total_available_for_options: marginTotal,
+              complete: allMarginsLive,
+              as_of: new Date().toISOString(),
+            },
             new_investments: {
               status: baselineStatus,
               definition: "Change in investment/cost basis since the previous successful five-broker update; market price/NAV movement does not count as a new investment.",
