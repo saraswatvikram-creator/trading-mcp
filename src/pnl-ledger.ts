@@ -67,7 +67,13 @@ export async function persistExecutions(
 
   // D1 batch is transactional. Use each INSERT's changes count rather than
   // table counts, which can be distorted by simultaneous ingestion runs.
-  const insertResults = insertStatements.length ? await db.batch(insertStatements) : [];
+  // Keep each D1 batch below the platform's statement-count limits while
+  // preserving the database UNIQUE constraint as the authoritative replay guard.
+  const insertResults: D1Result[] = [];
+  for (let offset = 0; offset < insertStatements.length; offset += 50) {
+    const chunk = insertStatements.slice(offset, offset + 50);
+    insertResults.push(...await db.batch(chunk));
+  }
   const recordsInserted = insertResults.reduce(
     (total, result) => total + Number((result as any)?.meta?.changes ?? 0),
     0,
