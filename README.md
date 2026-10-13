@@ -81,6 +81,8 @@ Margin failures are independent of holdings failures: a broker margin API error 
 
 Additional read-only tools: `angelone_margin`, `groww_margin`, `fivepaisa_margin`, and `mstock_margin`; `zerodha_margins` remains available.
 
+If m.Stock returns HTTP 403 `ACCESS DENIED` with a `Your IP` field, the current Worker egress is being rejected. Cloudflare Worker outbound IPs are not fixed; the margin/holdings APIs cannot be considered fully available until m.Stock accepts a stable egress IP. Do not treat the reported Cloudflare IP as a stable allowlist value.
+
 ## Daily Trading Desk authentication
 
 The preferred first command each trading day is:
