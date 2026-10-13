@@ -320,6 +320,18 @@ function result(payload: any) {
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
 }
 
+export async function getMStockTradesForLedger(env: MStockEnv): Promise<{ trades: any[]; endpoint: string }> {
+  const live = await liveOrTotp(env);
+  if (!live.live) throw new Error("m.Stock authentication required for tradebook ingestion: " + live.auth.reason);
+  const { apiKey } = config(env);
+  const token = await storedToken(env);
+  if (!token) throw new Error("MSTOCK_AUTH_REQUIRED: No m.Stock access token is stored.");
+  const endpoint = "GET /openapi/typea/tradebook";
+  const response = await get("/openapi/typea/tradebook", apiKey, token);
+  const rows = Array.isArray(response?.data) ? response.data : Array.isArray(response?.data?.tradebook) ? response.data.tradebook : [];
+  return { trades: rows, endpoint };
+}
+
 export async function getMStockHoldings(env: MStockEnv, totp?: string): Promise<any> {
   const r = await liveOrTotp(env, totp);
   if (!r.live) return r.auth;
