@@ -14,6 +14,9 @@ const ANGELONE_PROFILE_URL =
 const ANGELONE_POSITION_URL =
   "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/getPosition";
 
+const ANGELONE_RMS_URL =
+  "https://apiconnect.angelone.in/rest/secure/angelbroking/user/v1/getRMS";
+
 const ANGELONE_ALL_HOLDING_URL =
   "https://apiconnect.angelone.in/rest/secure/angelbroking/portfolio/v1/getAllHolding";
 
@@ -162,6 +165,43 @@ export async function getAngelOneHoldings(env: AngelOneEnv): Promise<any> {
 }
 
 
+export async function getAngelOneMargin(env: AngelOneEnv): Promise<any> {
+  const login = await angelOneLogin(env);
+  const response = await angelOneGet(ANGELONE_RMS_URL, env, login.jwtToken);
+  const data = response?.data ?? {};
+
+  const numeric = (...keys: string[]): number | null => {
+    for (const key of keys) {
+      const value = data?.[key];
+      if (value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))) {
+        return Number(value);
+      }
+    }
+    return null;
+  };
+
+  const net = numeric("net");
+  return {
+    status: "LIVE",
+    broker: "Angel One",
+    available_for_options: net,
+    net_available_margin: net,
+    available_cash: numeric("availablecash"),
+    available_limit_margin: numeric("availablelimitmargin"),
+    collateral: numeric("collateral"),
+    margin_utilised: numeric("utiliseddebits"),
+    span_utilised: numeric("utilisedspan"),
+    exposure_utilised: numeric("utilisedexposure"),
+    option_premium_utilised: numeric("utilisedoptionpremium"),
+    realised_mtm: numeric("m2mrealized"),
+    unrealised_mtm: numeric("m2munrealized"),
+    source: "Angel One SmartAPI getRMS",
+    as_of: new Date().toISOString(),
+    raw: data,
+    read_only: true,
+  };
+}
+
 export function registerAngelOneTools(server: any, env: AngelOneEnv): void {
 
   server.registerTool(
@@ -212,6 +252,16 @@ export function registerAngelOneTools(server: any, env: AngelOneEnv): void {
         type: "text",
         text: JSON.stringify(await getAngelOneHoldings(env), null, 2)
       }]
+    })
+  );
+
+  server.registerTool(
+    "angelone_margin",
+    {
+      description: "Read live Angel One RMS funds, available margin, collateral and utilisation. Read-only.",
+    },
+    async () => ({
+      content: [{ type: "text", text: JSON.stringify(await getAngelOneMargin(env), null, 2) }],
     })
   );
 
