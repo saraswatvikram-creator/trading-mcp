@@ -763,7 +763,7 @@ function createServer(
       }
       const startedAt = new Date().toISOString();
       const outcomes: any[] = [];
-      const today = startedAt.slice(0, 10);
+      const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
       const baseUrl = new URL("https://trading-mcp.saraswat-vikram.workers.dev").origin;
 
       const normalizeSide = (value: unknown): "BUY" | "SELL" | null => {
