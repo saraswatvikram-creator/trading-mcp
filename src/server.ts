@@ -6,12 +6,14 @@ import { registerFivePaisaTools, handleFivePaisaCallback, getFivePaisaHoldings, 
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 import { runUpdateAuth, handleAuthRoute } from "./auth";
+import { getLedgerCoverage } from "./pnl-ledger";
 
 type Env = {
   ZERODHA_API_KEY: string;
   ZERODHA_API_SECRET: string;
   ZERODHA_ACCESS_TOKEN?: string;
   ZERODHA_TOKEN_STORE?: KVNamespace;
+  PNL_DB?: D1Database;
 
   ANGELONE_API_KEY?: string;
   ANGELONE_CLIENT_ID?: string;
@@ -686,6 +688,47 @@ function createServer(
     }
   );
 
+
+  // ==========================================================
+  // DURABLE P&L LEDGER HEALTH
+  // ==========================================================
+  server.registerTool(
+    "pnl_ledger_status",
+    {
+      description: "Read-only health and coverage check for the durable D1 P&L execution ledger. Reports stored executions by broker and whether broker-reported realised P&L is present. Does not change ledger data.",
+    },
+    async () => {
+      if (!env.PNL_DB) {
+        return { content: [{ type: "text", text: [
+          "# P&L Ledger Status",
+          "",
+          "**Status: BLOCKED — D1 binding missing**",
+          "",
+          "The Worker has no PNL_DB binding. The durable ledger is not active. Bind PNL_DB to the provisioned Cloudflare D1 database and apply migrations/0001_pnl_ledger.sql before relying on ledger coverage.",
+          "The existing KV binding is for tokens and audit metadata; it is not the transaction ledger.",
+        ].join("\\n") }] };
+      }
+      try {
+        const coverage = await getLedgerCoverage(env.PNL_DB as any);
+        const rows = (coverage as any[]).map((row) =>
+          `| ${row.broker} | ${row.executions} | ${row.first_execution ?? "—"} | ${row.last_execution ?? "—"} | ${row.rows_with_realised_pnl} |`
+        ).join("\\n");
+        return { content: [{ type: "text", text: [
+          "# P&L Ledger Status",
+          "",
+          "**Status: D1 CONNECTED — ingestion coverage only**",
+          "",
+          "| Broker | Stored executions | First execution | Latest execution | Rows with broker-reported realised P&L |",
+          "|---|---:|---|---|---:|",
+          rows || "| — | 0 | — | — | 0 |",
+          "",
+          "An empty ledger or missing realised-P&L fields is not proof of zero P&L. This health check does not certify accounting completeness.",
+        ].join("\\n") }] };
+      } catch (error) {
+        return { content: [{ type: "text", text: "P&L ledger query failed: " + (error instanceof Error ? error.message : String(error)) }] };
+      }
+    }
+  );
 
   // ==========================================================
   // HISTORICAL P&L LEDGER / RECONCILIATION AUDIT
