@@ -690,6 +690,66 @@ function createServer(
 
 
   // ==========================================================
+  // DURABLE P&L LEDGER INITIALIZATION
+  // ==========================================================
+  server.registerTool(
+    "pnl_ledger_initialize",
+    {
+      description: "Initialize the protected historical P&L baseline in D1 if absent and verify required ledger tables. Safe to rerun; never overwrites an existing baseline and does not ingest trades or calculate new P&L.",
+    },
+    async () => {
+      if (!env.PNL_DB) {
+        return { content: [{ type: "text", text: "BLOCKED: PNL_DB binding is missing. No data was changed." }] };
+      }
+      try {
+        const db = env.PNL_DB;
+        const tables = await db.prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('pnl_executions','pnl_ingestion_runs','pnl_baseline','pnl_reconciliation') ORDER BY name"
+        ).all<{name:string}>();
+        const names = new Set((tables.results ?? []).map((r) => r.name));
+        const required = ["pnl_executions","pnl_ingestion_runs","pnl_baseline","pnl_reconciliation"];
+        const missing = required.filter((name) => !names.has(name));
+        if (missing.length) {
+          return { content: [{ type: "text", text: "BLOCKED: required D1 tables missing: " + missing.join(", ") + ". Apply migrations/0001_pnl_ledger.sql first. No data was changed." }] };
+        }
+        const baseline = {
+          currency: "INR",
+          unit: "lakh",
+          frozenThrough: "2026-10-06",
+          years: [
+            { fy: "2020-21", gross: -0.86, chargesTaxes: -0.16, interest: -0.52, incomeTax: 0.00, net: -1.54 },
+            { fy: "2021-22", gross: 0.09, chargesTaxes: -0.50, interest: -0.07, incomeTax: 0.00, net: -0.48 },
+            { fy: "2022-23", gross: 15.01, chargesTaxes: -0.79, interest: -0.08, incomeTax: -3.54, net: 10.61 },
+            { fy: "2023-24", gross: -14.35, chargesTaxes: -0.82, interest: 0.25, incomeTax: 0.00, net: -14.92 },
+            { fy: "2024-25", gross: 9.24, chargesTaxes: -0.31, interest: -5.07, incomeTax: -0.97, net: 2.90 },
+            { fy: "2025-26", gross: 0.30, chargesTaxes: -4.55, interest: -7.48, incomeTax: 0.00, net: -11.73 },
+            { fy: "2026-27", gross: 11.87, chargesTaxes: -6.83, interest: -4.86, incomeTax: -0.04, net: 0.13 }
+          ],
+          totals: { gross: 21.30, chargesTaxes: -13.96, interest: -17.83, incomeTax: -4.54, net: -15.04 },
+          source: "User-confirmed historical P&L baseline through 2026-10-06; preserve as supplied and do not recompute."
+        };
+        const existing = await db.prepare(
+          "SELECT baseline_key FROM pnl_baseline WHERE baseline_key = ?"
+        ).bind("historical-through-2026-10-06-v1").first<{baseline_key:string}>();
+        if (existing) {
+          return { content: [{ type: "text", text: "READY: all required tables exist. Frozen historical baseline already present; left unchanged. This operation does not prove broker ingestion or accounting completeness." }] };
+        }
+        await db.prepare(
+          "INSERT INTO pnl_baseline (baseline_key, baseline_json, frozen_at, source) VALUES (?, ?, ?, ?)"
+        ).bind(
+          "historical-through-2026-10-06-v1",
+          JSON.stringify(baseline),
+          new Date().toISOString(),
+          "User-confirmed historical ledger baseline; frozen through 2026-10-06"
+        ).run();
+        return { content: [{ type: "text", text: "READY: required D1 tables verified and frozen historical baseline inserted once. Baseline totals preserved as supplied: gross ₹21.30 lakh; net ₹-15.04 lakh. No executions ingested and no new realised P&L calculated." }] };
+      } catch (error) {
+        return { content: [{ type: "text", text: "INITIALIZATION FAILED: " + (error instanceof Error ? error.message : String(error)) }] };
+      }
+    }
+  );
+
+  // ==========================================================
   // DURABLE P&L LEDGER HEALTH
   // ==========================================================
   server.registerTool(
