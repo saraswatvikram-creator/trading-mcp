@@ -779,7 +779,7 @@ function createServer(
         const text = value.trim();
         const parsed = new Date(text);
         if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
-        const local = text.match(/^(\\d{2})-(\\d{2})-(\\d{4})[ T](\\d{2}:\\d{2}:\\d{2})$/);
+        const local = text.match(/^(\d{2})-(\d{2})-(\d{4})[ T](\d{2}:\d{2}:\d{2})$/);
         if (local) {
           const indiaTime = new Date(local[3] + "-" + local[2] + "-" + local[1] + "T" + local[4] + "+05:30");
           return Number.isNaN(indiaTime.getTime()) ? null : indiaTime.toISOString();
@@ -873,7 +873,7 @@ function createServer(
           const price = toNumber(row?.fillprice, row?.price);
           const timeValue = row?.filltime ?? row?.exchtime ?? row?.tradetime;
           let tradeTime = toIso(timeValue);
-          if (!tradeTime && typeof timeValue === "string" && /^\\d{2}:\\d{2}:\\d{2}$/.test(timeValue)) tradeTime = toIso(today + "T" + timeValue + "+05:30");
+          if (!tradeTime && typeof timeValue === "string" && /^\d{2}:\d{2}:\d{2}$/.test(timeValue)) tradeTime = toIso(today + "T" + timeValue + "+05:30");
           if (!executionId || !side || !quantity || price === null || !tradeTime || !row?.tradingsymbol) return null;
           return { broker: "AngelOne", executionId, orderId: row?.orderid == null ? null : String(row.orderid), exchangeOrderId: row?.exchangeorderid == null ? null : String(row.exchangeorderid), tradeTime, tradingSymbol: String(row.tradingsymbol), exchange: row?.exchange ?? null, segment: row?.producttype ?? row?.instrumenttype ?? null, side, quantity, price, brokerRealisedPnl: null, charges: null, taxes: null, raw: row, sourceEndpoint: result.endpoint };
         }, today, today, "SUCCESS");
@@ -988,7 +988,7 @@ function createServer(
     },
     async () => {
       const now = new Date();
-      const dateKey = now.toISOString().slice(0, 10);
+      const dateKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
       const auditKey = `pnl:reconciliation:audit:${dateKey}`;
       const baselineKey = "pnl:historical:consolidated-baseline:v1";
       const baseline = {
