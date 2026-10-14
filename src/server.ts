@@ -648,7 +648,7 @@ function createServer(
       const payload = await runUpdateAuth(env, baseUrl);
       const rows = payload.authentication
         .map((item: any, index: number) =>
-          `| ${index + 1} | **${item.broker}** | [Complete Authentication](${item.action_url}) | ${item.status === "VALID" ? "🟢 VALID" : "🔴 AUTHENTICATION REQUIRED"} |`
+          `| ${index + 1} | **${item.broker}** | [Complete Authentication](${item.action_url}) | ${item.status === "VALID" ? "🟢 VALID" : "🔴 UNAVAILABLE"} — ${item.message} |`
         )
         .join("\n");
 
@@ -667,12 +667,14 @@ function createServer(
         `| 7 | **Trading Desk** | Final authentication check | ${payload.status === "READY" ? "🟢 READY" : "🔴 NOT READY"} |`,
         "",
         payload.status === "READY"
-          ? "### Trading Desk READY"
-          : "### Trading Desk NOT READY — complete the failed broker authentication link(s) above and run **Update Auth** again.",
+          ? "### Trading Desk READY — all five brokers authenticated"
+          : payload.status === "PARTIAL_READY"
+            ? "### Trading Desk PARTIALLY READY — continue with authenticated brokers"
+            : "### Trading Desk NOT READY — no broker authenticated",
         "",
-        payload.status === "READY"
-          ? "You can now run **Update Trades**, **Update P/L** and **Update Investments**."
-          : "Downstream Trading Desk updates must not be run until all five brokers are VALID.",
+        payload.status === "READY" || payload.status === "PARTIAL_READY"
+          ? "Run **Update Trades**, **Update P/L** and **Update Investments**. Each report should include every broker whose authentication/API call succeeds and identify unavailable brokers individually; one broker failure must not block the others."
+          : "No broker is currently authenticated, so broker data cannot be refreshed. Complete at least one broker authentication and run **Update Auth** again.",
         "",
         "### Automation note",
         payload.tool_refresh.message,
