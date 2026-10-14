@@ -673,8 +673,8 @@ function createServer(
           : "### Trading Desk NOT READY — complete the failed broker authentication link(s) above and run **Update Auth** again.",
         "",
         payload.status === "READY"
-          ? "You can now run **Update Trades**, **Update P/L** and **Update Investments**."
-          : "Downstream Trading Desk updates must not be run until all five brokers are VALID.",
+          ? "You can now run **Update Trades**, **Update P/L** and **Update Investments**. Update P/L also supports partial broker authentication and reports per-broker failures."
+          : "Partial authentication does not block Update P/L: it processes brokers independently and flags unavailable sources. Complete failed broker authentication links for a fully live Trading Desk.",
         "",
         "### Automation note",
         payload.tool_refresh.message,
@@ -752,12 +752,8 @@ function createServer(
   // ==========================================================
   // DURABLE P&L EXECUTION INGESTION
   // ==========================================================
-  server.registerTool(
-    "pnl_ingest_executions",
-    {
-      description: "Read-only, duplicate-safe ingestion of current-day execution records from all five broker APIs. Reports row-level rejections and broker failures; does not infer realised P&L from positions or orders.",
-    },
-    async () => {
+  // Shared ingestion runner: Update P/L invokes the same per-broker-isolated workflow.
+  const runPnlIngestion = async () => {
       if (!env.PNL_DB) {
         return { content: [{ type: "text", text: "BLOCKED: PNL_DB binding missing. No executions ingested." }] };
       }
@@ -931,7 +927,14 @@ function createServer(
         historicalBaselineChanged: false,
         brokers: outcomes,
       }, null, 2) }] };
-    }
+  };
+
+  server.registerTool(
+    "pnl_ingest_executions",
+    {
+      description: "Read-only, duplicate-safe ingestion of current-day execution records from all five broker APIs. Reports row-level rejections and broker failures; does not infer realised P&L from positions or orders.",
+    },
+    async () => runPnlIngestion(),
   );
 
   // ==========================================================
@@ -1005,6 +1008,36 @@ function createServer(
         note: "Preserve supplied totals exactly; do not force broker-level totals to reconcile to consolidated totals.",
       };
       const issues: string[] = [];
+      let ingestionStatus = "UNAVAILABLE";
+      let ingestionBrokers: any[] = [];
+      try {
+        const ingestionResponse: any = await runPnlIngestion();
+        const ingestionText = ingestionResponse?.content?.find((item: any) => item?.type === "text")?.text;
+        if (typeof ingestionText === "string") {
+          try {
+            const parsed = JSON.parse(ingestionText);
+            ingestionStatus = String(parsed?.status ?? "UNKNOWN");
+            ingestionBrokers = Array.isArray(parsed?.brokers) ? parsed.brokers : [];
+            for (const brokerResult of ingestionBrokers) {
+              if (brokerResult?.status === "FAILED" || brokerResult?.status === "PARTIAL") {
+                issues.push(String(brokerResult.broker) + " execution ingestion " + String(brokerResult.status) + ": " + String(brokerResult.error ?? brokerResult.sourceRowsRejected ?? "source coverage incomplete"));
+              }
+            }
+            if (parsed?.historicalBaselineChanged !== false) {
+              issues.push("Execution ingestion did not explicitly confirm baseline protection; verify before posting accounting changes.");
+            }
+          } catch {
+            ingestionStatus = "UNPARSEABLE_RESPONSE";
+            issues.push("Execution ingestion returned an unparseable response; no new realised P&L was posted.");
+          }
+        } else {
+          ingestionStatus = "NO_RESPONSE";
+          issues.push("Execution ingestion returned no text response; no new realised P&L was posted.");
+        }
+      } catch (error) {
+        ingestionStatus = "FAILED";
+        issues.push("Execution ingestion runner failed: " + (error instanceof Error ? error.message : String(error)));
+      }
       let storageStatus = "UNAVAILABLE";
       let baselineStatus = "NOT_PERSISTED";
       let previousAudit: any = null;
@@ -1033,6 +1066,8 @@ function createServer(
         report_date: dateKey,
         generated_at: now.toISOString(),
         status: "RECONCILIATION_REQUIRED",
+        execution_ingestion_status: ingestionStatus,
+        execution_ingestion_brokers: ingestionBrokers,
         storage_status: storageStatus,
         baseline_status: baselineStatus,
         confirmed_today_realised_pnl: null,
@@ -1062,7 +1097,7 @@ function createServer(
         "",
         "**Status: " + audit.status + "**",
         "",
-        "Historical baseline: " + baselineStatus + ". Audit persistence: " + storageStatus + ".",
+        "Historical baseline: " + baselineStatus + ". Audit persistence: " + storageStatus + ". Execution ingestion: " + ingestionStatus + ".",
         "Today's realised P&L is **unconfirmed**, not zero: the current broker tools do not yet provide complete transaction-level closed-trade reconciliation across all five brokers.",
         "",
         "## Table 1 — P&L Summary (₹ lakh)",
