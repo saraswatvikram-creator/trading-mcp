@@ -1008,6 +1008,31 @@ function createServer(
         note: "Preserve supplied totals exactly; do not force broker-level totals to reconcile to consolidated totals.",
       };
       const issues: string[] = [];
+      // Update P/L runs the same authentication gate as Update Auth so the
+      // workflow is connected end-to-end, without relying on the user to run
+      // a separate chat first. Partial broker authentication is recorded but
+      // does not prevent healthy brokers from being ingested.
+      let authenticationStatus = "UNAVAILABLE";
+      let authenticationBrokers: any[] = [];
+      try {
+        const authPayload: any = await runUpdateAuth(env, baseUrl);
+        authenticationStatus = String(authPayload?.status ?? "UNKNOWN");
+        authenticationBrokers = Array.isArray(authPayload?.authentication)
+          ? authPayload.authentication
+          : [];
+        for (const brokerAuth of authenticationBrokers) {
+          if (brokerAuth?.status !== "VALID") {
+            issues.push(String(brokerAuth?.broker ?? "Unknown broker") + " authentication is not VALID; its feed may be unavailable.");
+          }
+        }
+        if (authenticationStatus !== "READY") {
+          issues.push("Update Auth gate did not return READY; ingestion will continue broker-by-broker and realised P&L remains unconfirmed.");
+        }
+      } catch (error) {
+        authenticationStatus = "FAILED";
+        issues.push("Update Auth gate failed: " + (error instanceof Error ? error.message : String(error)) + ". Broker ingestion will still attempt independent sources.");
+      }
+
       let ingestionStatus = "UNAVAILABLE";
       let ingestionBrokers: any[] = [];
       try {
@@ -1066,6 +1091,8 @@ function createServer(
         report_date: dateKey,
         generated_at: now.toISOString(),
         status: "RECONCILIATION_REQUIRED",
+        authentication_status: authenticationStatus,
+        authentication_brokers: authenticationBrokers,
         execution_ingestion_status: ingestionStatus,
         execution_ingestion_brokers: ingestionBrokers,
         storage_status: storageStatus,
@@ -1097,8 +1124,9 @@ function createServer(
         "",
         "**Status: " + audit.status + "**",
         "",
-        "Historical baseline: " + baselineStatus + ". Audit persistence: " + storageStatus + ". Execution ingestion: " + ingestionStatus + ".",
-        "Today's realised P&L is **unconfirmed**, not zero: the current broker tools do not yet provide complete transaction-level closed-trade reconciliation across all five brokers.",
+        "Authentication gate: " + authenticationStatus + ". Historical baseline: " + baselineStatus + ". Audit persistence: " + storageStatus + ". Execution ingestion: " + ingestionStatus + ".",
+        "Update P/L automatically runs the same authentication gate as Update Auth. Broker authentication is reported per broker; partial authentication does not stop healthy broker feeds.",
+        "Today's realised P&L is **unconfirmed**, not zero: execution ingestion does not yet calculate and reconcile complete transaction-level realised P&L, fees, taxes and interest across all five brokers.",
         "",
         "## Table 1 — P&L Summary (₹ lakh)",
         "",
