@@ -188,18 +188,24 @@ export async function runUpdateAuth(env: AuthEnv, baseUrl: string): Promise<any>
     result("m.Stock", mstock, actionUrls["m.Stock"], "Type A + TOTP"),
   ];
 
-  const allValid = brokers.every((b) => b.status === "VALID");
+  const validCount = brokers.filter((b) => b.status === "VALID").length;
+  const allValid = validCount === brokers.length;
+  const anyValid = validCount > 0;
 
   return {
-    status: allValid ? "READY" : "NOT_READY",
+    // Readiness is broker-independent: partial connectivity must not block
+    // reports from the brokers whose API sessions are valid.
+    status: allValid ? "READY" : anyValid ? "PARTIAL_READY" : "NOT_READY",
     authentication: brokers,
     tool_refresh: {
       status: "REQUIRES_CHATGPT_PLUGIN_REFRESH",
       message: "Broker authentication is fully automated. The ChatGPT plugin tool catalogue must be refreshed once after this tool is first deployed so ChatGPT can load the new Update Auth tool.",
     },
-    downstream_ready: allValid,
-    next_commands: allValid
-      ? ["update dashboard", "update P/L", "update investments"]
+    downstream_ready: anyValid,
+    available_brokers: brokers.filter((b) => b.status === "VALID").map((b) => b.broker),
+    unavailable_brokers: brokers.filter((b) => b.status !== "VALID").map((b) => b.broker),
+    next_commands: anyValid
+      ? ["update trades", "update P/L", "update investments"]
       : [],
     read_only: true,
   };
