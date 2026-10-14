@@ -1,17 +1,19 @@
 import { McpServer } from "@modelcontextprotocol/server";
-import { registerAngelOneTools, getAngelOneHoldings, getAngelOneMargin } from "./angelone";
-import { registerGrowwTools, getGrowwHoldings, getGrowwMargin } from "./groww";
-import { registerMStockTools, getMStockHoldings, getMStockMargin } from "./mstock";
-import { registerFivePaisaTools, handleFivePaisaCallback, getFivePaisaHoldings, getFivePaisaMargin } from "./fivepaisa";
+import { registerAngelOneTools, getAngelOneHoldings, getAngelOneMargin, getAngelOneTradesForLedger } from "./angelone";
+import { registerGrowwTools, getGrowwHoldings, getGrowwMargin, getGrowwTradesForLedger } from "./groww";
+import { registerMStockTools, getMStockHoldings, getMStockMargin, getMStockTradesForLedger } from "./mstock";
+import { registerFivePaisaTools, handleFivePaisaCallback, getFivePaisaHoldings, getFivePaisaMargin, getFivePaisaTradesForLedger } from "./fivepaisa";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 import { runUpdateAuth, handleAuthRoute } from "./auth";
+import { getLedgerCoverage, persistExecutions, type PnlExecution, type PnlBroker } from "./pnl-ledger";
 
 type Env = {
   ZERODHA_API_KEY: string;
   ZERODHA_API_SECRET: string;
   ZERODHA_ACCESS_TOKEN?: string;
   ZERODHA_TOKEN_STORE?: KVNamespace;
+  PNL_DB?: D1Database;
 
   ANGELONE_API_KEY?: string;
   ANGELONE_CLIENT_ID?: string;
@@ -688,6 +690,292 @@ function createServer(
     }
   );
 
+
+  // ==========================================================
+  // DURABLE P&L LEDGER INITIALIZATION
+  // ==========================================================
+  server.registerTool(
+    "pnl_ledger_initialize",
+    {
+      description: "Initialize the protected historical P&L baseline in D1 if absent and verify required ledger tables. Safe to rerun; never overwrites an existing baseline and does not ingest trades or calculate new P&L.",
+    },
+    async () => {
+      if (!env.PNL_DB) {
+        return { content: [{ type: "text", text: "BLOCKED: PNL_DB binding is missing. No data was changed." }] };
+      }
+      try {
+        const db = env.PNL_DB;
+        const tables = await db.prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('pnl_executions','pnl_ingestion_runs','pnl_baseline','pnl_reconciliation') ORDER BY name"
+        ).all<{name:string}>();
+        const names = new Set((tables.results ?? []).map((r) => r.name));
+        const required = ["pnl_executions","pnl_ingestion_runs","pnl_baseline","pnl_reconciliation"];
+        const missing = required.filter((name) => !names.has(name));
+        if (missing.length) {
+          return { content: [{ type: "text", text: "BLOCKED: required D1 tables missing: " + missing.join(", ") + ". Apply migrations/0001_pnl_ledger.sql first. No data was changed." }] };
+        }
+        const baseline = {
+          currency: "INR",
+          unit: "lakh",
+          frozenThrough: "2026-10-06",
+          years: [
+            { fy: "2020-21", gross: -0.86, chargesTaxes: -0.16, interest: -0.52, incomeTax: 0.00, net: -1.54 },
+            { fy: "2021-22", gross: 0.09, chargesTaxes: -0.50, interest: -0.07, incomeTax: 0.00, net: -0.48 },
+            { fy: "2022-23", gross: 15.01, chargesTaxes: -0.79, interest: -0.08, incomeTax: -3.54, net: 10.61 },
+            { fy: "2023-24", gross: -14.35, chargesTaxes: -0.82, interest: 0.25, incomeTax: 0.00, net: -14.92 },
+            { fy: "2024-25", gross: 9.24, chargesTaxes: -0.31, interest: -5.07, incomeTax: -0.97, net: 2.90 },
+            { fy: "2025-26", gross: 0.30, chargesTaxes: -4.55, interest: -7.48, incomeTax: 0.00, net: -11.73 },
+            { fy: "2026-27", gross: 11.87, chargesTaxes: -6.83, interest: -4.86, incomeTax: -0.04, net: 0.13 }
+          ],
+          totals: { gross: 21.30, chargesTaxes: -13.96, interest: -17.83, incomeTax: -4.54, net: -15.04 },
+          source: "User-confirmed historical P&L baseline through 2026-10-06; preserve as supplied and do not recompute."
+        };
+        const existing = await db.prepare(
+          "SELECT baseline_key FROM pnl_baseline WHERE baseline_key = ?"
+        ).bind("historical-through-2026-10-06-v1").first<{baseline_key:string}>();
+        if (existing) {
+          return { content: [{ type: "text", text: "READY: all required tables exist. Frozen historical baseline already present; left unchanged. This operation does not prove broker ingestion or accounting completeness." }] };
+        }
+        await db.prepare(
+          "INSERT INTO pnl_baseline (baseline_key, baseline_json, frozen_at, source) VALUES (?, ?, ?, ?)"
+        ).bind(
+          "historical-through-2026-10-06-v1",
+          JSON.stringify(baseline),
+          new Date().toISOString(),
+          "User-confirmed historical ledger baseline; frozen through 2026-10-06"
+        ).run();
+        return { content: [{ type: "text", text: "READY: required D1 tables verified and frozen historical baseline inserted once. Baseline totals preserved as supplied: gross ₹21.30 lakh; net ₹-15.04 lakh. No executions ingested and no new realised P&L calculated." }] };
+      } catch (error) {
+        return { content: [{ type: "text", text: "INITIALIZATION FAILED: " + (error instanceof Error ? error.message : String(error)) }] };
+      }
+    }
+  );
+
+  // ==========================================================
+  // DURABLE P&L EXECUTION INGESTION
+  // ==========================================================
+  server.registerTool(
+    "pnl_ingest_executions",
+    {
+      description: "Read-only, duplicate-safe ingestion of current-day execution records from all five broker APIs. Reports row-level rejections and broker failures; does not infer realised P&L from positions or orders.",
+    },
+    async () => {
+      if (!env.PNL_DB) {
+        return { content: [{ type: "text", text: "BLOCKED: PNL_DB binding missing. No executions ingested." }] };
+      }
+      const startedAt = new Date().toISOString();
+      const outcomes: any[] = [];
+      const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+      const baseUrl = new URL("https://trading-mcp.saraswat-vikram.workers.dev").origin;
+
+      const normalizeSide = (value: unknown): "BUY" | "SELL" | null => {
+        const v = String(value ?? "").trim().toUpperCase();
+        if (["BUY", "B", "1"].includes(v)) return "BUY";
+        if (["SELL", "S", "2"].includes(v)) return "SELL";
+        return null;
+      };
+      const toNumber = (...values: unknown[]): number | null => {
+        for (const value of values) {
+          if (value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))) return Number(value);
+        }
+        return null;
+      };
+      const toIso = (value: unknown): string | null => {
+        if (typeof value !== "string" || !value.trim()) return null;
+        const text = value.trim();
+        const parsed = new Date(text);
+        if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+        const local = text.match(/^(\\d{2})-(\\d{2})-(\\d{4})[ T](\\d{2}:\\d{2}:\\d{2})$/);
+        if (local) {
+          const indiaTime = new Date(local[3] + "-" + local[2] + "-" + local[1] + "T" + local[4] + "+05:30");
+          return Number.isNaN(indiaTime.getTime()) ? null : indiaTime.toISOString();
+        }
+        return null;
+      };
+      const ingest = async (
+        broker: PnlBroker,
+        rows: any[],
+        endpoint: string,
+        mapper: (row: any) => PnlExecution | null,
+        coverageStart: string | null,
+        coverageEnd: string | null,
+        sourceStatus: "SUCCESS" | "PARTIAL" = "SUCCESS",
+        sourceError?: string,
+      ) => {
+        const mapped: PnlExecution[] = [];
+        let rejected = 0;
+        for (const row of rows) {
+          const execution = mapper(row);
+          if (!execution) rejected++;
+          else mapped.push(execution);
+        }
+        const status = sourceStatus === "PARTIAL" || rejected > 0 ? "PARTIAL" : "SUCCESS";
+        const result = await persistExecutions(
+          env.PNL_DB!, broker, mapped, endpoint, coverageStart, coverageEnd,
+          startedAt, new Date().toISOString(), status,
+          [sourceError, rejected ? String(rejected) + " source rows rejected because stable execution ID or required execution fields were missing/unrecognised" : null].filter(Boolean).join("; ") || undefined,
+        );
+        outcomes.push({ ...result, sourceRowsRejected: rejected, coverageStart, coverageEnd, sourceEndpoint: endpoint });
+      };
+
+      try {
+        const response: any = await zerodhaGet("/trades", env);
+        const rows = Array.isArray(response?.data) ? response.data : [];
+        await ingest("Zerodha", rows, "Kite Connect GET /trades (current day only)", (row) => {
+          const executionId = row?.trade_id === undefined || row?.trade_id === null ? null : String(row.trade_id);
+          const side = normalizeSide(row?.transaction_type);
+          const quantity = toNumber(row?.quantity);
+          const price = toNumber(row?.price, row?.average_price);
+          const tradeTime = toIso(row?.exchange_timestamp ?? row?.fill_timestamp ?? row?.order_timestamp) ?? (row?.exchange_timestamp ? String(row.exchange_timestamp) : null);
+          if (!executionId || !side || !quantity || !price || !tradeTime || !row?.tradingsymbol) return null;
+          return {
+            broker: "Zerodha", executionId, orderId: row?.order_id == null ? null : String(row.order_id),
+            exchangeOrderId: row?.exchange_order_id == null && row?.EXCH_ORDER_NUMBER == null ? null : String(row?.exchange_order_id ?? row?.EXCH_ORDER_NUMBER),
+            tradeTime, tradingSymbol: String(row.tradingsymbol), exchange: row?.exchange ?? null,
+            segment: row?.instrument_token ? String(row.instrument_token) : row?.product ?? null,
+            side, quantity, price, brokerRealisedPnl: null, charges: null, taxes: null,
+            raw: row, sourceEndpoint: "Kite Connect GET /trades (current day only)",
+          };
+        }, today, today, "SUCCESS");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await persistExecutions(env.PNL_DB, "Zerodha", [], "Kite Connect GET /trades (current day only)", today, today, startedAt, new Date().toISOString(), "FAILED", message);
+        outcomes.push({ broker: "Zerodha", status: "FAILED", error: message, recordsSeen: 0, recordsInserted: 0, recordsDuplicate: 0 });
+      }
+
+      try {
+        const result = await getFivePaisaTradesForLedger(env, baseUrl);
+        await ingest("5Paisa", result.trades, result.endpoint, (row) => {
+          const executionIdRaw = row?.ExchangeTradeID ?? row?.ExchangeTradeId ?? row?.TradeID ?? row?.TradeId ?? row?.TradeNo ?? row?.TradeNumber;
+          const executionId = executionIdRaw == null ? null : String(executionIdRaw);
+          const side = normalizeSide(row?.BuySell ?? row?.BuySellFlag ?? row?.TransactionType ?? row?.TrdType);
+          const quantity = toNumber(row?.TradeQty, row?.Qty, row?.Quantity, row?.TradedQty);
+          const price = toNumber(row?.TradeRate, row?.Rate, row?.Price, row?.TradePrice);
+          const timeValue = row?.ExchangeTradeTime ?? row?.TradeTime ?? row?.ExchangeTime ?? row?.OrderTime ?? row?.TrdTime;
+          const tradeTime = toIso(timeValue) ?? (typeof timeValue === "string" && timeValue.trim() ? timeValue : null);
+          const symbol = row?.ScripName ?? row?.Symbol ?? row?.TradingSymbol ?? row?.ScripCode;
+          if (!executionId || !side || !quantity || !price || !tradeTime || symbol == null) return null;
+          return {
+            broker: "5Paisa", executionId, orderId: row?.ExchOrderID == null && row?.OrderID == null ? null : String(row?.ExchOrderID ?? row?.OrderID),
+            exchangeOrderId: row?.ExchangeOrderID == null ? null : String(row.ExchangeOrderID),
+            tradeTime, tradingSymbol: String(symbol), exchange: row?.Exch ?? row?.Exchange ?? null,
+            segment: row?.ExchType ?? row?.Segment ?? null, side, quantity, price,
+            brokerRealisedPnl: null, charges: null, taxes: null, raw: row, sourceEndpoint: result.endpoint,
+          };
+        }, null, null, "SUCCESS", result.coverage);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await persistExecutions(env.PNL_DB, "5Paisa", [], "5Paisa POST /V1/TradeBook", null, null, startedAt, new Date().toISOString(), "FAILED", message);
+        outcomes.push({ broker: "5Paisa", status: "FAILED", error: message, recordsSeen: 0, recordsInserted: 0, recordsDuplicate: 0 });
+      }
+
+      try {
+        const result = await getAngelOneTradesForLedger(env);
+        await ingest("AngelOne", result.trades, result.endpoint, (row) => {
+          const id = row?.fillid ?? row?.fillId ?? row?.tradeid ?? row?.trade_id;
+          const executionId = id == null ? null : String(id);
+          const side = normalizeSide(row?.transactiontype ?? row?.transaction_type);
+          const quantity = toNumber(row?.fillsize, row?.quantity, row?.fillquantity);
+          const price = toNumber(row?.fillprice, row?.price);
+          const timeValue = row?.filltime ?? row?.exchtime ?? row?.tradetime;
+          let tradeTime = toIso(timeValue);
+          if (!tradeTime && typeof timeValue === "string" && /^\\d{2}:\\d{2}:\\d{2}$/.test(timeValue)) tradeTime = toIso(today + "T" + timeValue + "+05:30");
+          if (!executionId || !side || !quantity || price === null || !tradeTime || !row?.tradingsymbol) return null;
+          return { broker: "AngelOne", executionId, orderId: row?.orderid == null ? null : String(row.orderid), exchangeOrderId: row?.exchangeorderid == null ? null : String(row.exchangeorderid), tradeTime, tradingSymbol: String(row.tradingsymbol), exchange: row?.exchange ?? null, segment: row?.producttype ?? row?.instrumenttype ?? null, side, quantity, price, brokerRealisedPnl: null, charges: null, taxes: null, raw: row, sourceEndpoint: result.endpoint };
+        }, today, today, "SUCCESS");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await persistExecutions(env.PNL_DB, "AngelOne", [], "GET /rest/secure/angelbroking/order/v1/getTradeBook", today, today, startedAt, new Date().toISOString(), "FAILED", message);
+        outcomes.push({ broker: "AngelOne", status: "FAILED", error: message, recordsSeen: 0, recordsInserted: 0, recordsDuplicate: 0 });
+      }
+
+      try {
+        const result = await getGrowwTradesForLedger(env);
+        await ingest("Groww", result.trades, result.endpoint, (row) => {
+          const id = row?.groww_trade_id ?? row?.exchange_trade_id;
+          const executionId = id == null ? null : String(id);
+          const side = normalizeSide(row?.transaction_type);
+          const quantity = toNumber(row?.quantity);
+          const price = toNumber(row?.price);
+          const tradeTime = toIso(row?.trade_date_time ?? row?.created_at);
+          if (!executionId || !side || !quantity || price === null || !tradeTime || !row?.trading_symbol) return null;
+          return { broker: "Groww", executionId, orderId: row?.groww_order_id == null ? null : String(row.groww_order_id), exchangeOrderId: row?.exchange_order_id == null ? null : String(row.exchange_order_id), tradeTime, tradingSymbol: String(row.trading_symbol), exchange: row?.exchange ?? null, segment: row?.segment ?? null, side, quantity, price, brokerRealisedPnl: null, charges: null, taxes: null, raw: row, sourceEndpoint: result.endpoint };
+        }, today, today, "SUCCESS", "Orders examined: " + result.ordersSeen);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await persistExecutions(env.PNL_DB, "Groww", [], "GET /v1/order/list + GET /v1/order/trades/{groww_order_id}", today, today, startedAt, new Date().toISOString(), "FAILED", message);
+        outcomes.push({ broker: "Groww", status: "FAILED", error: message, recordsSeen: 0, recordsInserted: 0, recordsDuplicate: 0 });
+      }
+
+      try {
+        const result = await getMStockTradesForLedger(env);
+        await ingest("m.Stock", result.trades, result.endpoint, (row) => {
+          const id = row?.trade_id ?? row?.tradeid ?? row?.trade_no ?? row?.fill_id ?? row?.exchange_trade_id ?? row?.TRADE_NUMBER;
+          const executionId = id == null ? null : String(id);
+          const side = normalizeSide(row?.transaction_type ?? row?.transactiontype ?? row?.buy_sell ?? row?.BUY_SELL);
+          const quantity = toNumber(row?.quantity, row?.traded_quantity, row?.fill_quantity, row?.QUANTITY);
+          const price = toNumber(row?.price, row?.trade_price, row?.average_price, row?.PRICE);
+          const tradeTime = toIso(row?.trade_time ?? row?.trade_date_time ?? row?.trade_date ?? row?.filltime ?? row?.order_timestamp ?? row?.ORDER_DATE_TIME);
+          const symbol = row?.trading_symbol ?? row?.tradingsymbol ?? row?.symbol ?? row?.SYMBOL;
+          if (!executionId || !side || !quantity || price === null || !tradeTime || !symbol) return null;
+          return { broker: "m.Stock", executionId, orderId: row?.order_id == null && row?.orderid == null && row?.ORDER_NUMBER == null ? null : String(row?.order_id ?? row?.orderid ?? row?.ORDER_NUMBER), exchangeOrderId: row?.exchange_order_id == null && row?.EXCH_ORDER_NUMBER == null ? null : String(row?.exchange_order_id ?? row?.EXCH_ORDER_NUMBER), tradeTime, tradingSymbol: String(symbol), exchange: row?.exchange ?? row?.EXCHANGE ?? null, segment: row?.segment ?? row?.product ?? row?.SEGMENT ?? null, side, quantity, price, brokerRealisedPnl: null, charges: null, taxes: null, raw: row, sourceEndpoint: result.endpoint };
+        }, today, today, "SUCCESS");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await persistExecutions(env.PNL_DB, "m.Stock", [], "GET /openapi/typea/tradebook", today, today, startedAt, new Date().toISOString(), "FAILED", message);
+        outcomes.push({ broker: "m.Stock", status: "FAILED", error: message, recordsSeen: 0, recordsInserted: 0, recordsDuplicate: 0 });
+      }
+      return { content: [{ type: "text", text: JSON.stringify({
+        status: outcomes.some((x) => x.status === "FAILED" || x.status === "PARTIAL" || x.status === "NOT_INGESTED") ? "PARTIAL" : "SUCCESS",
+        generatedAt: new Date().toISOString(),
+        duplicateProtection: "UNIQUE(broker, execution_id) + INSERT OR IGNORE in D1",
+        realisedPnl: "Not calculated from fills. Broker-reported realised P&L and fees are not populated by these endpoints; this is execution ingestion only.",
+        historicalBaselineChanged: false,
+        brokers: outcomes,
+      }, null, 2) }] };
+    }
+  );
+
+  // ==========================================================
+  // DURABLE P&L LEDGER HEALTH
+  // ==========================================================
+  server.registerTool(
+    "pnl_ledger_status",
+    {
+      description: "Read-only health and coverage check for the durable D1 P&L execution ledger. Reports stored executions by broker and whether broker-reported realised P&L is present. Does not change ledger data.",
+    },
+    async () => {
+      if (!env.PNL_DB) {
+        return { content: [{ type: "text", text: [
+          "# P&L Ledger Status",
+          "",
+          "**Status: BLOCKED — D1 binding missing**",
+          "",
+          "The Worker has no PNL_DB binding. The durable ledger is not active. Bind PNL_DB to the provisioned Cloudflare D1 database and apply migrations/0001_pnl_ledger.sql before relying on ledger coverage.",
+          "The existing KV binding is for tokens and audit metadata; it is not the transaction ledger.",
+        ].join("\\n") }] };
+      }
+      try {
+        const coverage = await getLedgerCoverage(env.PNL_DB as any);
+        const rows = (coverage as any[]).map((row) =>
+          `| ${row.broker} | ${row.executions} | ${row.first_execution ?? "—"} | ${row.last_execution ?? "—"} | ${row.rows_with_realised_pnl} |`
+        ).join("\\n");
+        return { content: [{ type: "text", text: [
+          "# P&L Ledger Status",
+          "",
+          "**Status: D1 CONNECTED — ingestion coverage only**",
+          "",
+          "| Broker | Stored executions | First execution | Latest execution | Rows with broker-reported realised P&L |",
+          "|---|---:|---|---|---:|",
+          rows || "| — | 0 | — | — | 0 |",
+          "",
+          "An empty ledger or missing realised-P&L fields is not proof of zero P&L. This health check does not certify accounting completeness.",
+        ].join("\\n") }] };
+      } catch (error) {
+        return { content: [{ type: "text", text: "P&L ledger query failed: " + (error instanceof Error ? error.message : String(error)) }] };
+      }
+    }
+  );
 
   // ==========================================================
   // HISTORICAL P&L LEDGER / RECONCILIATION AUDIT

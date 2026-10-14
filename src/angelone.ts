@@ -139,6 +139,13 @@ async function angelOneGet(url: string, env: AngelOneEnv, jwtToken: string): Pro
   return data;
 }
 
+export async function getAngelOneTradesForLedger(env: AngelOneEnv): Promise<{ trades: any[]; endpoint: string }> {
+  const login = await angelOneLogin(env);
+  const endpoint = "GET /rest/secure/angelbroking/order/v1/getTradeBook";
+  const response = await angelOneGet("https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/getTradeBook", env, login.jwtToken);
+  return { trades: Array.isArray(response?.data) ? response.data : [], endpoint };
+}
+
 export async function getAngelOneHoldings(env: AngelOneEnv, includeMargin = false): Promise<any> {
   const login = await angelOneLogin(env);
   const holdings = await angelOneGet(ANGELONE_ALL_HOLDING_URL, env, login.jwtToken);

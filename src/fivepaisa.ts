@@ -518,6 +518,26 @@ function dashboardTable(
   ].join("\n");
 }
 
+export async function getFivePaisaTradesForLedger(env: FivePaisaEnv, baseUrl: string): Promise<{ trades: any[]; endpoint: string; coverage: string }> {
+  requireFivePaisaConfig(env);
+  const session = await ensureFivePaisaSession(env, baseUrl);
+  if (!session.accessToken || !session.clientCode) {
+    throw new Error("5Paisa authentication is required before tradebook ingestion.");
+  }
+  const endpoint = "/V1/TradeBook";
+  try {
+    const response = await fivePaisaPost(env, endpoint, {});
+    const trades = Array.isArray(response?.body?.TradeBookDetail) ? response.body.TradeBookDetail : [];
+    return { trades, endpoint, coverage: "broker tradebook response; coverage dates not supplied by endpoint" };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/No Trades found for this Client/i.test(message)) {
+      return { trades: [], endpoint, coverage: "broker reports no trades" };
+    }
+    throw error;
+  }
+}
+
 export async function getFivePaisaHoldings(env: FivePaisaEnv, baseUrl: string): Promise<any> {
   requireFivePaisaConfig(env);
   const session = await ensureFivePaisaSession(env, baseUrl);
