@@ -113,6 +113,8 @@ After all five brokers are valid, the user can run:
 2. **update P/L**
 3. **update investments**
 
+**Update Trades margin integration:** every Update Trades run must call the `update_trades_margin` tool and render its `formatted_section` as **Section 4 — Available Margin for Options**. Keep the five broker rows and combined total sourced from that live response; if any broker API fails or returns a non-numeric value, show that broker as unavailable and withhold the combined total. Move **New Trades — Today** to Section 5. This tool uses the same five margin API helpers as Update Investments and is read-only.
+
 ### Trading Desk RAG — 75% Target / MTM
 
 The **75% Target / MTM** dashboard column uses the following RAG thresholds against Max Profit:
