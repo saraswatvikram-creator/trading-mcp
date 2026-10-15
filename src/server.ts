@@ -1012,6 +1012,111 @@ function createServer(
   );
 
   // ==========================================================
+  // UPDATE TRADES — AVAILABLE OPTIONS MARGIN
+  // ==========================================================
+  server.registerTool(
+    "update_trades_margin",
+    {
+      description: "Fetch the live available-for-options margin section for the Update Trades dashboard from the same five broker margin APIs used by Update Investments. Call on every Update Trades run. Returns broker rows, a combined total only when all five numeric responses are live, and a ready-to-render Section 4. Read-only; never places, modifies, cancels or squares off orders.",
+    },
+    async () => {
+      const names = ["Zerodha", "Angel One", "Groww", "5Paisa", "m.Stock"];
+      const results = await Promise.allSettled([
+        getZerodhaMargin(env),
+        getAngelOneMargin(env),
+        getGrowwMargin(env),
+        getFivePaisaMargin(env, baseUrl),
+        getMStockMargin(env),
+      ]);
+
+      const brokers = results.map((r, i) => {
+        if (r.status === "fulfilled") {
+          const value: any = r.value;
+          const available = value?.available_for_options;
+          const availableNumber =
+            available !== null && available !== undefined && available !== "" &&
+            Number.isFinite(Number(available))
+              ? Number(available)
+              : null;
+          const live = value?.status === "LIVE" && availableNumber !== null;
+          return {
+            broker: names[i],
+            status: live ? "LIVE" : "PARTIAL",
+            error: live ? null : (value?.error ?? value?.message ?? "Margin endpoint did not return a live numeric available amount."),
+            available_for_options: availableNumber,
+            available_for_options_source_field: value?.available_for_options_source_field ?? null,
+            available_balance: value?.available_balance ?? value?.available_cash ?? value?.clear_cash ?? value?.ledger_balance ?? null,
+            collateral: value?.collateral ?? value?.collateral_available ?? value?.collateral_after_haircut ?? null,
+            margin_utilised: value?.margin_utilised ?? value?.net_margin_used ?? null,
+            option_premium_utilised: value?.option_premium_utilised ?? value?.options_premium_utilised ?? value?.option_buy_premium_utilised ?? null,
+            source: value?.source ?? null,
+            as_of: value?.as_of ?? new Date().toISOString(),
+          };
+        }
+        return {
+          broker: names[i],
+          status: "ERROR",
+          error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+          available_for_options: null,
+          available_for_options_source_field: null,
+          available_balance: null,
+          collateral: null,
+          margin_utilised: null,
+          option_premium_utilised: null,
+          source: null,
+          as_of: null,
+        };
+      });
+
+      const complete = brokers.length === names.length && brokers.every(
+        (b) => b.status === "LIVE" && Number.isFinite(b.available_for_options)
+      );
+      const total = complete
+        ? brokers.reduce((sum, broker) => sum + Number(broker.available_for_options), 0)
+        : null;
+      const inr = (value: number | null) => value === null
+        ? "UNAVAILABLE"
+        : (value < 0 ? "−₹" + Math.abs(value).toLocaleString("en-IN", { maximumFractionDigits: 2 }) : "₹" + value.toLocaleString("en-IN", { maximumFractionDigits: 2 }));
+      const section = [
+        "## Section 4 — Available Margin for Options",
+        "",
+        "Combined available margin reported by broker APIs",
+        "",
+        "# " + inr(total),
+        "",
+        complete ? "All five broker margin APIs returned live numeric values." : "Margin validation required — one or more broker values are unavailable. The combined total is withheld rather than estimated.",
+        "",
+        "| Broker | Available for options | Status |",
+        "|---|---:|---|",
+        ...brokers.map((b) => "| " + b.broker + " | " + inr(b.available_for_options) + " | " + b.status + (b.error ? " — " + b.error.replace(/\|/g, "/") : "") + " |"),
+        "| **TOTAL** | **" + inr(total) + "** | " + (complete ? "LIVE" : "PARTIAL") + " |",
+        "",
+        "These values are broker-reported balances, not a recommendation to trade. Verify the balances before deploying new spreads."
+      ].join("\n");
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            status: complete ? "LIVE" : "PARTIAL",
+            dashboard: "Update Trades — Available Margin for Options",
+            margin_summary: {
+              status: complete ? "LIVE" : "PARTIAL",
+              definition: "Available margin/funds for options as reported by the same broker margin APIs used by Update Investments. The combined total is returned only when all five APIs provide live numeric amounts.",
+              brokers,
+              total_available_for_options: total,
+              complete,
+              as_of: new Date().toISOString(),
+            },
+            formatted_section: section,
+            read_only: true,
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  // ==========================================================
   // HELLO
   // ==========================================================
 
