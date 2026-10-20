@@ -1096,6 +1096,7 @@ function createServer(
       const mondayKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(monday);
       const monthKey = dateKey.slice(0, 7) + "-01";
       const fyStartYear = Number(dateKey.slice(0, 4)) - (Number(dateKey.slice(5, 7)) < 4 ? 1 : 0);
+      const currentFyLabel = "FY " + fyStartYear + "–" + String(fyStartYear + 1).slice(-2);
       const fyStart = fyStartYear + "-04-01";
       const periodStart = { today: dayStart, week: isoAtIndiaMidnight(mondayKey), month: isoAtIndiaMidnight(monthKey), fy: isoAtIndiaMidnight(fyStart) };
       const inRange = (time: string, startTime: string, endTime?: string) => time >= startTime && (!endTime || time < endTime);
@@ -1207,7 +1208,7 @@ function createServer(
         "",
         "## Table 1 — P&L Summary (₹ lakh)",
         "",
-        "| Broker | Today | This Week | This Month | FY 2026–27 | All Time in Ledger |",
+        "| Broker | Today | This Week | This Month | " + currentFyLabel + " | All Time in Ledger |",
         "|---|---:|---:|---:|---:|---:|",
         brokerRows,
         consolidatedRow,
