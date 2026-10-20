@@ -1217,7 +1217,7 @@ function createServer(
         "",
         "Update Auth ran automatically: " + authenticationStatus + ". Execution ingestion: " + ingestionStatus + ". Ledger: " + storageStatus + ".",
         "Both reports below are calculated from the same durable execution ledger; no manually supplied baseline or cross-report reconciliation is used.",
-        "Table 1 is reconstructed realised **gross** P&L using FIFO matching. Open positions/MTM are excluded. A dash means the source data is unavailable, not zero.",
+        "Table 1 is reconstructed realised **gross** P&L using FIFO matching for executions currently stored. Open positions/MTM are excluded. “All Time in Ledger” is not a claim of full account history: pre-ledger trades absent from broker API responses cannot be reconstructed. A dash means source data is unavailable, not zero.",
         "",
         "## Table 1 — P&L Summary (₹ lakh)",
         "",
