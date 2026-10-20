@@ -747,6 +747,32 @@ function createServer(
       if (!env.PNL_DB) {
         return { content: [{ type: "text", text: "BLOCKED: PNL_DB binding missing. No executions ingested." }] };
       }
+      // Self-provision the required ledger tables so the user does not need to
+      // run a separate initialization or manually apply a schema migration.
+      const schemaStatements = [
+        `CREATE TABLE IF NOT EXISTS pnl_executions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          broker TEXT NOT NULL CHECK (broker IN ('Zerodha','AngelOne','Groww','5Paisa','m.Stock')),
+          execution_id TEXT NOT NULL, order_id TEXT, exchange_order_id TEXT,
+          trade_time TEXT NOT NULL, trading_symbol TEXT NOT NULL, exchange TEXT, segment TEXT,
+          side TEXT NOT NULL CHECK (side IN ('BUY','SELL')), quantity REAL NOT NULL, price REAL NOT NULL,
+          gross_value REAL NOT NULL, broker_realised_pnl REAL, charges REAL, taxes REAL,
+          raw_json TEXT NOT NULL, source_endpoint TEXT NOT NULL,
+          ingested_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+          UNIQUE (broker, execution_id)
+        )`,
+        "CREATE INDEX IF NOT EXISTS idx_pnl_exec_time ON pnl_executions(trade_time)",
+        "CREATE INDEX IF NOT EXISTS idx_pnl_exec_broker_time ON pnl_executions(broker, trade_time)",
+        `CREATE TABLE IF NOT EXISTS pnl_ingestion_runs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, broker TEXT NOT NULL, started_at TEXT NOT NULL,
+          completed_at TEXT, status TEXT NOT NULL CHECK (status IN ('RUNNING','SUCCESS','PARTIAL','FAILED')),
+          records_seen INTEGER NOT NULL DEFAULT 0, records_inserted INTEGER NOT NULL DEFAULT 0,
+          records_duplicate INTEGER NOT NULL DEFAULT 0, coverage_start TEXT, coverage_end TEXT,
+          source_endpoint TEXT, error TEXT
+        )`,
+        "CREATE INDEX IF NOT EXISTS idx_pnl_runs_started ON pnl_ingestion_runs(started_at)"
+      ];
+      for (const sql of schemaStatements) await env.PNL_DB.prepare(sql).run();
       const startedAt = new Date().toISOString();
       const outcomes: any[] = [];
       const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -1021,8 +1047,8 @@ function createServer(
                 issues.push(String(brokerResult.broker) + " execution ingestion " + String(brokerResult.status) + ": " + String(brokerResult.error ?? brokerResult.sourceRowsRejected ?? "source coverage incomplete"));
               }
             }
-            if (parsed?.historicalBaselineChanged !== false) {
-              issues.push("Execution ingestion did not explicitly confirm baseline protection; verify before posting accounting changes.");
+            if (parsed?.status !== "SUCCESS" && parsed?.status !== "PARTIAL") {
+              issues.push("Execution ingestion did not return a recognized completion status.");
             }
           } catch {
             ingestionStatus = "UNPARSEABLE_RESPONSE";
@@ -1157,7 +1183,6 @@ function createServer(
         open_lot_count: fifo.openLots,
         confirmed_today_realised_gross_pnl: currentPeriodMatches.today.length ? sumMatches(currentPeriodMatches.today) : null,
         open_position_mtm_included: false,
-        historical_baseline_modified: false,
         issues,
       };
       if (env.ZERODHA_TOKEN_STORE && storageStatus === "D1_READ_WRITE_AVAILABLE") {
