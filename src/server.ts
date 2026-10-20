@@ -1108,9 +1108,9 @@ function createServer(
       const fyStart = fyStartYear + "-04-01";
       const periodStart = { today: dayStart, week: isoAtIndiaMidnight(mondayKey), month: isoAtIndiaMidnight(monthKey), fy: isoAtIndiaMidnight(fyStart) };
       const inRange = (time: string, startTime: string, endTime?: string) => time >= startTime && (!endTime || time < endTime);
-      const sumMatches = (items: typeof fifo.matches[]) => items.reduce((sum, m) => sum + m.grossPnl, 0);
+      const sumMatches = (items: typeof fifo.matches) => items.reduce((sum, m) => sum + m.grossPnl, 0);
       const lakh = (value: number) => (value / 100000).toFixed(2);
-      const fmtPeriod = (items: typeof fifo.matches[], broker?: PnlBroker) => {
+      const fmtPeriod = (items: typeof fifo.matches, broker?: PnlBroker) => {
         const selected = broker ? items.filter((m) => m.broker === broker) : items;
         return selected.length ? lakh(sumMatches(selected)) : "—";
       };
