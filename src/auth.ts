@@ -44,31 +44,38 @@ async function getZerodhaToken(env: AuthEnv): Promise<string | null> {
 }
 
 async function validateZerodha(env: AuthEnv): Promise<{valid:boolean; message:string}> {
-  if (!env.ZERODHA_API_KEY) {
-    return { valid: false, message: "ZERODHA_API_KEY is not configured." };
-  }
+  try {
+    if (!env.ZERODHA_API_KEY) {
+      return { valid: false, message: "ZERODHA_API_KEY is not configured." };
+    }
 
-  const token = await getZerodhaToken(env);
-  if (!token) {
-    return { valid: false, message: "No Zerodha access token is stored. Complete Zerodha login." };
-  }
+    const token = await getZerodhaToken(env);
+    if (!token) {
+      return { valid: false, message: "No Zerodha access token is stored. Complete Zerodha login." };
+    }
 
-  const response = await fetch("https://api.kite.trade/user/profile", {
-    headers: {
-      "X-Kite-Version": "3",
-      Authorization: "token " + env.ZERODHA_API_KEY + ":" + token,
-    },
-  });
+    const response = await fetch("https://api.kite.trade/user/profile", {
+      headers: {
+        "X-Kite-Version": "3",
+        Authorization: "token " + env.ZERODHA_API_KEY + ":" + token,
+      },
+    });
 
-  const data = await response.json();
-  if (!response.ok || data?.status !== "success") {
+    const data = await response.json();
+    if (!response.ok || data?.status !== "success") {
+      return {
+        valid: false,
+        message: "Zerodha API rejected the current access token. Complete Zerodha login again.",
+      };
+    }
+
+    return { valid: true, message: "Zerodha API session validated successfully." };
+  } catch (error) {
     return {
       valid: false,
-      message: "Zerodha API rejected the current access token. Complete Zerodha login again.",
+      message: error instanceof Error ? error.message : String(error),
     };
   }
-
-  return { valid: true, message: "Zerodha API session validated successfully." };
 }
 
 async function validateAngelOne(env: AuthEnv): Promise<{valid:boolean; message:string}> {
