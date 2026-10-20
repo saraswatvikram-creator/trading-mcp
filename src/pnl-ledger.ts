@@ -169,7 +169,7 @@ export function calculateFifoRealisedPnl(rows: LedgerExecutionRow[]): {
     const qty = Number(row.quantity);
     const price = Number(row.price);
     if (!Number.isFinite(qty) || qty <= 0 || !Number.isFinite(price)) continue;
-    const key = [row.broker, row.exchange ?? "", row.segment ?? "", row.trading_symbol].join("|");
+    const key = [row.broker, row.exchange ?? "", row.trading_symbol].join("|");
     const lots = lotsByContract.get(key) ?? [];
     let remaining = qty;
     const direction = row.side === "BUY" ? 1 : -1;
