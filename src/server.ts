@@ -1006,6 +1006,7 @@ function createServer(
       const now = new Date();
       const dateKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
       const auditKey = `pnl:reconciliation:audit:${dateKey}`;
+      const baseUrl = new URL("https://trading-mcp.saraswat-vikram.workers.dev").origin;
       const issues: string[] = [];
       // Update P/L runs the same authentication gate as Update Auth so the
       // workflow is connected end-to-end, without relying on the user to run
