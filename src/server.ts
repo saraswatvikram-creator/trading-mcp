@@ -856,7 +856,7 @@ function createServer(
         }, today, today, "SUCCESS");
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        await persistExecutions(env.PNL_DB, "Zerodha", [], "Kite Connect GET /trades (current day only)", today, today, startedAt, new Date().toISOString(), "FAILED", message);
+        try { await persistExecutions(env.PNL_DB, "Zerodha", [], "Kite Connect GET /trades (current day only)", today, today, startedAt, new Date().toISOString(), "FAILED", message); } catch { /* A ledger audit-write failure must not block the other brokers. */ }
         outcomes.push({ broker: "Zerodha", status: "FAILED", error: message, recordsSeen: 0, recordsInserted: 0, recordsDuplicate: 0 });
       }
 
@@ -882,7 +882,7 @@ function createServer(
         }, null, null, "SUCCESS", result.coverage);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        await persistExecutions(env.PNL_DB, "5Paisa", [], "5Paisa POST /V1/TradeBook", null, null, startedAt, new Date().toISOString(), "FAILED", message);
+        try { await persistExecutions(env.PNL_DB, "5Paisa", [], "5Paisa POST /V1/TradeBook", null, null, startedAt, new Date().toISOString(), "FAILED", message); } catch { /* A ledger audit-write failure must not block the other brokers. */ }
         outcomes.push({ broker: "5Paisa", status: "FAILED", error: message, recordsSeen: 0, recordsInserted: 0, recordsDuplicate: 0 });
       }
 
@@ -902,7 +902,7 @@ function createServer(
         }, today, today, "SUCCESS");
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        await persistExecutions(env.PNL_DB, "AngelOne", [], "GET /rest/secure/angelbroking/order/v1/getTradeBook", today, today, startedAt, new Date().toISOString(), "FAILED", message);
+        try { await persistExecutions(env.PNL_DB, "AngelOne", [], "GET /rest/secure/angelbroking/order/v1/getTradeBook", today, today, startedAt, new Date().toISOString(), "FAILED", message); } catch { /* A ledger audit-write failure must not block the other brokers. */ }
         outcomes.push({ broker: "AngelOne", status: "FAILED", error: message, recordsSeen: 0, recordsInserted: 0, recordsDuplicate: 0 });
       }
 
@@ -920,7 +920,7 @@ function createServer(
         }, today, today, "SUCCESS", "Orders examined: " + result.ordersSeen);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        await persistExecutions(env.PNL_DB, "Groww", [], "GET /v1/order/list + GET /v1/order/trades/{groww_order_id}", today, today, startedAt, new Date().toISOString(), "FAILED", message);
+        try { await persistExecutions(env.PNL_DB, "Groww", [], "GET /v1/order/list + GET /v1/order/trades/{groww_order_id}", today, today, startedAt, new Date().toISOString(), "FAILED", message); } catch { /* A ledger audit-write failure must not block the other brokers. */ }
         outcomes.push({ broker: "Groww", status: "FAILED", error: message, recordsSeen: 0, recordsInserted: 0, recordsDuplicate: 0 });
       }
 
@@ -939,7 +939,7 @@ function createServer(
         }, today, today, "SUCCESS");
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        await persistExecutions(env.PNL_DB, "m.Stock", [], "GET /openapi/typea/tradebook", today, today, startedAt, new Date().toISOString(), "FAILED", message);
+        try { await persistExecutions(env.PNL_DB, "m.Stock", [], "GET /openapi/typea/tradebook", today, today, startedAt, new Date().toISOString(), "FAILED", message); } catch { /* A ledger audit-write failure must not block the other brokers. */ }
         outcomes.push({ broker: "m.Stock", status: "FAILED", error: message, recordsSeen: 0, recordsInserted: 0, recordsDuplicate: 0 });
       }
       return { content: [{ type: "text", text: JSON.stringify({
