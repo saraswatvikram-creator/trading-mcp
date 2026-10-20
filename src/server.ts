@@ -952,7 +952,7 @@ function createServer(
         generatedAt: new Date().toISOString(),
         duplicateProtection: "UNIQUE(broker, execution_id) + INSERT OR IGNORE in D1",
         realisedPnl: "Not calculated from fills. Broker-reported realised P&L and fees are not populated by these endpoints; this is execution ingestion only.",
-        historicalBaselineChanged: false,
+        historicalBaselineUsed: false,
         brokers: outcomes,
       }, null, 2) }] };
   };
@@ -1012,7 +1012,7 @@ function createServer(
   server.registerTool(
     "update_pnl",
     {
-      description: "Refresh the Historical P&L report and persist a reconciliation audit in ZERODHA_TOKEN_STORE. Keeps the authoritative consolidated baseline unchanged unless closed-trade activity is fully verified. Explicitly flags incomplete broker tradebook coverage; never treats open-position MTM as realised P&L. Read-only broker APIs; only ledger/audit metadata is written.",
+      description: "Refresh both Historical P&L tables from one durable execution ledger. Does not read, preserve, or require a manually entered historical baseline. Automatically runs Update Auth and attempts each broker independently. Explicitly flags incomplete broker tradebook coverage; never treats open-position MTM as realised P&L. Read-only broker APIs; only ledger/audit metadata is written.",
     },
     async () => {
       const now = new Date();
