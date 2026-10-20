@@ -793,14 +793,21 @@ function createServer(
       const toIso = (value: unknown): string | null => {
         if (typeof value !== "string" || !value.trim()) return null;
         const text = value.trim();
-        const parsed = new Date(text);
-        if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
-        const local = text.match(/^(\d{2})-(\d{2})-(\d{4})[ T](\d{2}:\d{2}:\d{2})$/);
-        if (local) {
-          const indiaTime = new Date(local[3] + "-" + local[2] + "-" + local[1] + "T" + local[4] + "+05:30");
+        // Broker tradebooks commonly return local exchange time without an
+        // offset. Interpret these explicitly as India Standard Time rather
+        // than letting the Worker runtime silently treat them as UTC.
+        const dmy = text.match(/^(\d{2})-(\d{2})-(\d{4})[ T](\d{2}:\d{2}:\d{2})(?:\.\d+)?$/);
+        if (dmy) {
+          const indiaTime = new Date(dmy[3] + "-" + dmy[2] + "-" + dmy[1] + "T" + dmy[4] + "+05:30");
           return Number.isNaN(indiaTime.getTime()) ? null : indiaTime.toISOString();
         }
-        return null;
+        const ymdLocal = text.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.\d+)?$/);
+        if (ymdLocal) {
+          const indiaTime = new Date(ymdLocal[1] + "T" + ymdLocal[2] + "+05:30");
+          return Number.isNaN(indiaTime.getTime()) ? null : indiaTime.toISOString();
+        }
+        const parsed = new Date(text);
+        return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
       };
       const ingest = async (
         broker: PnlBroker,
@@ -836,7 +843,7 @@ function createServer(
           const side = normalizeSide(row?.transaction_type);
           const quantity = toNumber(row?.quantity);
           const price = toNumber(row?.price, row?.average_price);
-          const tradeTime = toIso(row?.exchange_timestamp ?? row?.fill_timestamp ?? row?.order_timestamp) ?? (row?.exchange_timestamp ? String(row.exchange_timestamp) : null);
+          const tradeTime = toIso(row?.exchange_timestamp ?? row?.fill_timestamp ?? row?.order_timestamp);
           if (!executionId || !side || !quantity || !price || !tradeTime || !row?.tradingsymbol) return null;
           return {
             broker: "Zerodha", executionId, orderId: row?.order_id == null ? null : String(row.order_id),
@@ -862,7 +869,7 @@ function createServer(
           const quantity = toNumber(row?.TradeQty, row?.Qty, row?.Quantity, row?.TradedQty);
           const price = toNumber(row?.TradeRate, row?.Rate, row?.Price, row?.TradePrice);
           const timeValue = row?.ExchangeTradeTime ?? row?.TradeTime ?? row?.ExchangeTime ?? row?.OrderTime ?? row?.TrdTime;
-          const tradeTime = toIso(timeValue) ?? (typeof timeValue === "string" && timeValue.trim() ? timeValue : null);
+          const tradeTime = toIso(timeValue);
           const symbol = row?.ScripName ?? row?.Symbol ?? row?.TradingSymbol ?? row?.ScripCode;
           if (!executionId || !side || !quantity || !price || !tradeTime || symbol == null) return null;
           return {
