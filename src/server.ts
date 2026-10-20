@@ -6,7 +6,7 @@ import { registerFivePaisaTools, handleFivePaisaCallback, getFivePaisaHoldings, 
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 import { runUpdateAuth, handleAuthRoute } from "./auth";
-import { getLedgerCoverage, persistExecutions, type PnlExecution, type PnlBroker } from "./pnl-ledger";
+import { getLedgerCoverage, persistExecutions, calculateFifoRealisedPnl, type PnlExecution, type PnlBroker, type LedgerExecutionRow } from "./pnl-ledger";
 
 type Env = {
   ZERODHA_API_KEY: string;
@@ -990,23 +990,6 @@ function createServer(
       const now = new Date();
       const dateKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
       const auditKey = `pnl:reconciliation:audit:${dateKey}`;
-      const baselineKey = "pnl:historical:consolidated-baseline:v1";
-      const baseline = {
-        currency: "INR",
-        unit: "lakh",
-        source: "user-authoritative-baseline",
-        years: [
-          { fy: "2020-21", gross: -0.86, charges_taxes: -0.16, interest: -0.52, income_tax: 0.00, net: -1.54 },
-          { fy: "2021-22", gross: 0.09, charges_taxes: -0.50, interest: -0.07, income_tax: 0.00, net: -0.48 },
-          { fy: "2022-23", gross: 15.01, charges_taxes: -0.79, interest: -0.08, income_tax: -3.54, net: 10.61 },
-          { fy: "2023-24", gross: -14.35, charges_taxes: -0.82, interest: 0.25, income_tax: 0.00, net: -14.92 },
-          { fy: "2024-25", gross: 9.24, charges_taxes: -0.31, interest: -5.07, income_tax: -0.97, net: 2.90 },
-          { fy: "2025-26", gross: 0.30, charges_taxes: -4.55, interest: -7.48, income_tax: 0.00, net: -11.73 },
-          { fy: "2026-27", gross: 11.87, charges_taxes: -6.83, interest: -4.86, income_tax: -0.04, net: 0.13 },
-        ],
-        totals: { gross: 21.30, charges_taxes: -13.96, interest: -17.83, income_tax: -4.54, net: -15.04 },
-        note: "Preserve supplied totals exactly; do not force broker-level totals to reconcile to consolidated totals.",
-      };
       const issues: string[] = [];
       // Update P/L runs the same authentication gate as Update Auth so the
       // workflow is connected end-to-end, without relying on the user to run
@@ -1064,95 +1047,179 @@ function createServer(
         issues.push("Execution ingestion runner failed: " + (error instanceof Error ? error.message : String(error)));
       }
       let storageStatus = "UNAVAILABLE";
-      let baselineStatus = "NOT_PERSISTED";
-      let previousAudit: any = null;
-      if (!env.ZERODHA_TOKEN_STORE) {
-        issues.push("ZERODHA_TOKEN_STORE is not bound; persistent P&L ledger writes are unavailable.");
+      let ledgerRows: LedgerExecutionRow[] = [];
+      let ledgerQueryError: string | null = null;
+      let coverageRows: any[] = [];
+      if (!env.PNL_DB) {
+        issues.push("PNL_DB is not bound; no durable execution ledger is available.");
       } else {
         try {
-          const storedBaseline = await env.ZERODHA_TOKEN_STORE.get(baselineKey, "json");
-          if (storedBaseline && typeof storedBaseline === "object") {
-            baselineStatus = "EXISTING";
-          } else {
-            await env.ZERODHA_TOKEN_STORE.put(baselineKey, JSON.stringify(baseline));
-            baselineStatus = "INITIALIZED";
-          }
-          previousAudit = await env.ZERODHA_TOKEN_STORE.get(auditKey, "json");
-          storageStatus = "KV_WRITE_AVAILABLE";
+          const result: any = await env.PNL_DB.prepare(
+            "SELECT broker, trade_time, trading_symbol, exchange, segment, side, quantity, price, charges, taxes, broker_realised_pnl FROM pnl_executions ORDER BY trade_time ASC"
+          ).all();
+          ledgerRows = Array.isArray(result?.results) ? result.results as LedgerExecutionRow[] : [];
+          coverageRows = await getLedgerCoverage(env.PNL_DB as any) as any[];
+          storageStatus = "D1_READ_WRITE_AVAILABLE";
         } catch (error) {
-          issues.push("KV persistence failed: " + (error instanceof Error ? error.message : String(error)));
+          ledgerQueryError = error instanceof Error ? error.message : String(error);
+          issues.push("Could not read the durable execution ledger: " + ledgerQueryError);
         }
       }
-      // Broker position endpoints do not constitute a complete closed-trade ledger.
-      // Do not post zero as a confirmed result and do not alter historical totals.
-      issues.push("Closed-trade activity has not been fully reconciled from transaction-level tradebooks across all five brokers.");
-      issues.push("Broker-specific charges/taxes and interest for new activity are not yet verified from source records.");
+
+      // Compute all report periods from one shared FIFO ledger. No manually
+      // entered baseline or second report is used as an input.
+      const fifo = calculateFifoRealisedPnl(ledgerRows);
+      const brokers: PnlBroker[] = ["Zerodha", "AngelOne", "Groww", "5Paisa", "m.Stock"];
+      const nowDate = new Date();
+      const isoAtIndiaMidnight = (date: string) => new Date(date + "T00:00:00+05:30").toISOString();
+      const dayStart = isoAtIndiaMidnight(dateKey);
+      const dateObj = new Date(dateKey + "T12:00:00+05:30");
+      const weekday = dateObj.getUTCDay();
+      const daysSinceMonday = (weekday + 6) % 7;
+      const monday = new Date(dateObj.getTime() - daysSinceMonday * 86400000);
+      const mondayKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(monday);
+      const monthKey = dateKey.slice(0, 7) + "-01";
+      const fyStartYear = Number(dateKey.slice(0, 4)) - (Number(dateKey.slice(5, 7)) < 4 ? 1 : 0);
+      const fyStart = fyStartYear + "-04-01";
+      const periodStart = { today: dayStart, week: isoAtIndiaMidnight(mondayKey), month: isoAtIndiaMidnight(monthKey), fy: isoAtIndiaMidnight(fyStart) };
+      const inRange = (time: string, startTime: string, endTime?: string) => time >= startTime && (!endTime || time < endTime);
+      const sumMatches = (items: typeof fifo.matches[]) => items.reduce((sum, m) => sum + m.grossPnl, 0);
+      const lakh = (value: number) => (value / 100000).toFixed(2);
+      const fmtPeriod = (items: typeof fifo.matches[], broker?: PnlBroker) => {
+        const selected = broker ? items.filter((m) => m.broker === broker) : items;
+        return selected.length ? lakh(sumMatches(selected)) : "—";
+      };
+      const currentFyMatches = fifo.matches.filter((m) => inRange(m.closeTime, periodStart.fy));
+      const allMatches = fifo.matches;
+      const currentPeriodMatches = {
+        today: fifo.matches.filter((m) => inRange(m.closeTime, periodStart.today)),
+        week: fifo.matches.filter((m) => inRange(m.closeTime, periodStart.week)),
+        month: fifo.matches.filter((m) => inRange(m.closeTime, periodStart.month)),
+        fy: currentFyMatches,
+        all: allMatches,
+      };
+      const brokerRows = brokers.map((broker) =>
+        "| " + broker + " | " + fmtPeriod(currentPeriodMatches.today, broker) + " | " +
+        fmtPeriod(currentPeriodMatches.week, broker) + " | " +
+        fmtPeriod(currentPeriodMatches.month, broker) + " | " +
+        fmtPeriod(currentPeriodMatches.fy, broker) + " | " +
+        fmtPeriod(currentPeriodMatches.all, broker) + " |"
+      ).join("\n");
+      const consolidatedRow = "| **Consolidated realised gross P&L** | **" +
+        fmtPeriod(currentPeriodMatches.today) + "** | **" +
+        fmtPeriod(currentPeriodMatches.week) + "** | **" +
+        fmtPeriod(currentPeriodMatches.month) + "** | **" +
+        fmtPeriod(currentPeriodMatches.fy) + "** | **" +
+        fmtPeriod(currentPeriodMatches.all) + "** |";
+
+      const availableTimes = ledgerRows.map((r) => r.trade_time).filter((v) => typeof v === "string").sort();
+      const firstAvailable = availableTimes[0] ?? null;
+      const lastAvailable = availableTimes[availableTimes.length - 1] ?? null;
+      const hasIncompleteCostData = ledgerRows.some((r) => r.charges === null || r.charges === undefined || r.taxes === null || r.taxes === undefined);
+      const coverageSummary = brokers.map((broker) => {
+        const c = coverageRows.find((row) => row.broker === broker);
+        return { broker, executions: Number(c?.executions ?? 0), first: c?.first_execution ?? null, last: c?.last_execution ?? null };
+      });
+      if (ledgerRows.length === 0) issues.push("The execution ledger contains no transactions; realised P&L cannot be computed from an empty ledger.");
+      if (hasIncompleteCostData) issues.push("Brokerage and taxes are missing on one or more execution records; net P&L cannot be asserted from the current ledger.");
+      if (coverageSummary.some((c) => c.executions === 0)) issues.push("One or more brokers have no stored executions; consolidated all-time history is not complete.");
+      issues.push("Historical coverage is limited to records actually returned by broker APIs and stored in the ledger. No user-entered baseline is used.");
+      issues.push("Interest is not exposed by the execution feeds used here; net P&L and income tax remain unconfirmed until source-backed values are available.");
+      const allHistoryYears = new Set<number>();
+      for (const row of ledgerRows) {
+        const d = new Date(row.trade_time);
+        if (!Number.isNaN(d.getTime())) {
+          const indiaYear = Number(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric" }).format(d));
+          const indiaMonth = Number(new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", month: "2-digit" }).format(d));
+          allHistoryYears.add(indiaMonth >= 4 ? indiaYear : indiaYear - 1);
+        }
+      }
+      const currentYearForFy = fyStartYear;
+      allHistoryYears.add(currentYearForFy);
+      const years = [...allHistoryYears].sort((a, b) => a - b);
+      const yearlyRows = years.map((fyYear) => {
+        const start = isoAtIndiaMidnight(fyYear + "-04-01");
+        const end = isoAtIndiaMidnight((fyYear + 1) + "-04-01");
+        const yearMatches = fifo.matches.filter((m) => inRange(m.closeTime, start, end));
+        const gross = yearMatches.length ? lakh(sumMatches(yearMatches)) : "—";
+        const yearExecutions = ledgerRows.filter((r) => inRange(r.trade_time, start, end));
+        const costsComplete = yearExecutions.length > 0 && yearExecutions.every((r) => r.charges !== null && r.charges !== undefined && r.taxes !== null && r.taxes !== undefined);
+        const chargesTaxes = costsComplete ? lakh(-yearExecutions.reduce((sum, r) => sum + Math.abs(Number(r.charges ?? 0)) + Math.abs(Number(r.taxes ?? 0)), 0)) : "—";
+        return "| " + fyYear + "–" + String(fyYear + 1).slice(-2) + " | " + gross + " | " + chargesTaxes + " | — | — | — |";
+      }).join("\n");
+      const totalGross = allMatches.length ? lakh(sumMatches(allMatches)) : "—";
+      const costRowsComplete = ledgerRows.length > 0 && ledgerRows.every((r) => r.charges !== null && r.charges !== undefined && r.taxes !== null && r.taxes !== undefined);
+      const totalCosts = costRowsComplete ? lakh(-ledgerRows.reduce((sum, r) => sum + Math.abs(Number(r.charges ?? 0)) + Math.abs(Number(r.taxes ?? 0)), 0)) : "—";
       const audit = {
         report_date: dateKey,
-        generated_at: now.toISOString(),
-        status: "RECONCILIATION_REQUIRED",
+        generated_at: nowDate.toISOString(),
+        status: ledgerQueryError ? "LEDGER_READ_FAILED" : (ledgerRows.length && ingestionStatus === "SUCCESS" && !hasIncompleteCostData ? "LEDGER_CALCULATED_COSTS_PARTIAL" : "SOURCE_COVERAGE_LIMITED"),
         authentication_status: authenticationStatus,
         authentication_brokers: authenticationBrokers,
         execution_ingestion_status: ingestionStatus,
         execution_ingestion_brokers: ingestionBrokers,
         storage_status: storageStatus,
-        baseline_status: baselineStatus,
-        confirmed_today_realised_pnl: null,
-        confirmed_week_realised_pnl: null,
-        confirmed_month_realised_pnl: null,
-        confirmed_fy_realised_pnl: null,
-        confirmed_all_time_realised_pnl: null,
+        baseline_status: "NOT_USED",
+        ledger_execution_count: ledgerRows.length,
+        ledger_first_execution: firstAvailable,
+        ledger_last_execution: lastAvailable,
+        fifo_realised_match_count: fifo.matches.length,
+        open_lot_count: fifo.openLots,
+        confirmed_today_realised_gross_pnl: currentPeriodMatches.today.length ? sumMatches(currentPeriodMatches.today) : null,
         open_position_mtm_included: false,
         historical_baseline_modified: false,
-        previous_run_for_date_exists: previousAudit !== null,
         issues,
       };
-      if (env.ZERODHA_TOKEN_STORE && storageStatus === "KV_WRITE_AVAILABLE") {
+      if (env.ZERODHA_TOKEN_STORE && storageStatus === "D1_READ_WRITE_AVAILABLE") {
         try {
           await env.ZERODHA_TOKEN_STORE.put(auditKey, JSON.stringify(audit), { expirationTtl: 60 * 60 * 24 * 400 });
           await env.ZERODHA_TOKEN_STORE.put("pnl:reconciliation:last-run", JSON.stringify(audit), { expirationTtl: 60 * 60 * 24 * 400 });
+          storageStatus = "D1_READ_WRITE_AVAILABLE / AUDIT_PERSISTED";
         } catch (error) {
-          audit.status = "PERSISTENCE_FAILED";
-          audit.issues.push("Could not persist this reconciliation audit: " + (error instanceof Error ? error.message : String(error)));
+          audit.status = "AUDIT_PERSISTENCE_FAILED";
+          audit.issues.push("Could not persist audit metadata: " + (error instanceof Error ? error.message : String(error)));
         }
       }
-      const yearlyRows = baseline.years.filter((y) => y.fy !== "2020-21").map((y) =>
-        `| ${y.fy.replace("-", "–")} | ${y.gross.toFixed(2)} | ${y.charges_taxes.toFixed(2)} | ${y.interest.toFixed(2)} | ${y.income_tax.toFixed(2)} | ${y.net.toFixed(2)} |`
+
+      const coverageTable = coverageSummary.map((c) =>
+        "| " + c.broker + " | " + c.executions + " | " + (c.first ?? "—") + " | " + (c.last ?? "—") + " |"
       ).join("\n");
       const report = [
         "# Update P/L — " + dateKey,
         "",
         "**Status: " + audit.status + "**",
         "",
-        "Authentication gate: " + authenticationStatus + ". Historical baseline: " + baselineStatus + ". Audit persistence: " + storageStatus + ". Execution ingestion: " + ingestionStatus + ".",
-        "Update P/L automatically runs the same authentication gate as Update Auth. Broker authentication is reported per broker; partial authentication does not stop healthy broker feeds.",
-        "Today's realised P&L is **unconfirmed**, not zero: execution ingestion does not yet calculate and reconcile complete transaction-level realised P&L, fees, taxes and interest across all five brokers.",
+        "Update Auth ran automatically: " + authenticationStatus + ". Execution ingestion: " + ingestionStatus + ". Ledger: " + storageStatus + ".",
+        "Both reports below are calculated from the same durable execution ledger; no manually supplied baseline or cross-report reconciliation is used.",
+        "Table 1 is reconstructed realised **gross** P&L using FIFO matching. Open positions/MTM are excluded. A dash means the source data is unavailable, not zero.",
         "",
         "## Table 1 — P&L Summary (₹ lakh)",
         "",
-        "| Broker | Today | This Week | This Month | FY 2026–27 | All Time |",
+        "| Broker | Today | This Week | This Month | FY 2026–27 | All Time in Ledger |",
         "|---|---:|---:|---:|---:|---:|",
-        "| Zerodha | — | — | — | 4.68* | 4.51* |",
-        "| AngelOne | — | — | — | 8.57* | 22.33* |",
-        "| Groww | — | — | — | 1.37* | 1.37* |",
-        "| 5Paisa | — | — | — | -3.02* | -7.18* |",
-        "| m.Stock | — | — | — | 0.27* | 0.27* |",
-        "| **Consolidated baseline** | **—** | **—** | **—** | **11.87** | **21.30** |",
-        "",
-        "*Broker figures are the previously recorded broker-level baseline and are not newly recalculated. Consolidated figures are maintained separately.",
+        brokerRows,
+        consolidatedRow,
         "",
         "## Table 2 — Yearly Summary (₹ lakh)",
         "",
-        "| FY | Gross P&L | Charges & Taxes | Interest | Income Tax | Net P&L |",
+        "| FY | Gross realised P&L (FIFO) | Charges & Taxes | Interest | Income Tax | Net P&L |",
         "|---|---:|---:|---:|---:|---:|",
-        yearlyRows,
-        `| **TOTAL** | **${baseline.totals.gross.toFixed(2)}** | **${baseline.totals.charges_taxes.toFixed(2)}** | **${baseline.totals.interest.toFixed(2)}** | **${baseline.totals.income_tax.toFixed(2)}** | **${baseline.totals.net.toFixed(2)}** |`,
+        yearlyRows || "| — | — | — | — | — | — |",
+        "| **TOTAL in ledger** | **" + totalGross + "** | **" + totalCosts + "** | **—** | **—** | **—** |",
+        "",
+        "## Automatic source coverage",
+        "",
+        "| Broker | Stored executions | First execution | Latest execution |",
+        "|---|---:|---|---|",
+        coverageTable,
+        "",
+        "Ledger coverage: " + (firstAvailable ?? "—") + " to " + (lastAvailable ?? "—") + ".",
+        "Cost and tax treatment is shown only when source fields are populated; interest is not inferred. This prevents fabricated net P&L or tax figures.",
         "",
         "## Validation",
         "- Open-position MTM excluded.",
-        "- Historical baseline unchanged.",
-        "- No new realised P&L posted without transaction-level verification.",
-        "- Charges/taxes/interest for new activity remain unverified.",
+        "- No manually entered baseline used.",
+        "- Duplicate-safe execution ingestion remains enabled.",
         "- Issues: " + issues.join(" "),
       ].join("\n");
       return { content: [{ type: "text", text: report }] };
