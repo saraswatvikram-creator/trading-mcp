@@ -122,3 +122,88 @@ export async function getConfirmedRealisedPnl(
      GROUP BY broker ORDER BY broker`
   ).bind(startInclusive, endExclusive).all();
 }
+
+
+export interface LedgerExecutionRow {
+  broker: PnlBroker;
+  trade_time: string;
+  trading_symbol: string;
+  exchange: string | null;
+  segment: string | null;
+  side: "BUY" | "SELL";
+  quantity: number;
+  price: number;
+  charges: number | null;
+  taxes: number | null;
+  broker_realised_pnl: number | null;
+}
+
+export interface RealisedMatch {
+  broker: PnlBroker;
+  closeTime: string;
+  tradingSymbol: string;
+  quantity: number;
+  grossPnl: number;
+}
+
+/**
+ * Reconstruct realised gross P&L by FIFO matching of the durable execution
+ * ledger. Open lots are deliberately excluded. This calculation is only as
+ * complete as the underlying execution history; it cannot manufacture older
+ * fills that a broker API did not return.
+ */
+export function calculateFifoRealisedPnl(rows: LedgerExecutionRow[]): {
+  matches: RealisedMatch[];
+  openLots: number;
+  unmatchedCloseQuantity: number;
+} {
+  const ordered = [...rows].sort((a, b) =>
+    a.trade_time.localeCompare(b.trade_time)
+  );
+  type Lot = { signedQty: number; price: number };
+  const lotsByContract = new Map<string, Lot[]>();
+  const matches: RealisedMatch[] = [];
+  let unmatchedCloseQuantity = 0;
+
+  for (const row of ordered) {
+    const qty = Number(row.quantity);
+    const price = Number(row.price);
+    if (!Number.isFinite(qty) || qty <= 0 || !Number.isFinite(price)) continue;
+    const key = [row.broker, row.exchange ?? "", row.segment ?? "", row.trading_symbol].join("|");
+    const lots = lotsByContract.get(key) ?? [];
+    let remaining = qty;
+    const direction = row.side === "BUY" ? 1 : -1;
+
+    while (remaining > 0 && lots.length > 0 && Math.sign(lots[0].signedQty) !== direction) {
+      const lot = lots[0];
+      const matched = Math.min(remaining, Math.abs(lot.signedQty));
+      const grossPnl = lot.signedQty > 0
+        ? (price - lot.price) * matched
+        : (lot.price - price) * matched;
+      matches.push({
+        broker: row.broker,
+        closeTime: row.trade_time,
+        tradingSymbol: row.trading_symbol,
+        quantity: matched,
+        grossPnl,
+      });
+      remaining -= matched;
+      lot.signedQty += direction * matched;
+      if (Math.abs(lot.signedQty) < 1e-9) lots.shift();
+    }
+
+    // A close without an opening execution in the available ledger indicates
+    // incomplete history; do not treat it as a fully reconstructed round trip.
+    if (remaining > 0) {
+      if (lots.length === 0 || Math.sign(lots[lots.length - 1].signedQty) === direction) {
+        lots.push({ signedQty: direction * remaining, price });
+      } else {
+        unmatchedCloseQuantity += remaining;
+      }
+    }
+    lotsByContract.set(key, lots);
+  }
+
+  const openLots = [...lotsByContract.values()].reduce((sum, lots) => sum + lots.length, 0);
+  return { matches, openLots, unmatchedCloseQuantity };
+}
