@@ -806,6 +806,11 @@ function createServer(
           const indiaTime = new Date(ymdLocal[1] + "T" + ymdLocal[2] + "+05:30");
           return Number.isNaN(indiaTime.getTime()) ? null : indiaTime.toISOString();
         }
+        const dateOnly = text.match(/^(\d{4}-\d{2}-\d{2})$/);
+        if (dateOnly) {
+          const indiaDate = new Date(dateOnly[1] + "T00:00:00+05:30");
+          return Number.isNaN(indiaDate.getTime()) ? null : indiaDate.toISOString();
+        }
         const parsed = new Date(text);
         return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
       };
