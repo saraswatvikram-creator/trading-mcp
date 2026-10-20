@@ -1181,9 +1181,6 @@ function createServer(
         }
       }
 
-      const coverageTable = coverageSummary.map((c) =>
-        "| " + c.broker + " | " + c.executions + " | " + (c.first ?? "—") + " | " + (c.last ?? "—") + " |"
-      ).join("\n");
       const report = [
         "# Update P/L — " + dateKey,
         "",
@@ -1206,12 +1203,6 @@ function createServer(
         "|---|---:|---:|---:|---:|---:|",
         yearlyRows || "| — | — | — | — | — | — |",
         "| **TOTAL in ledger** | **" + totalGross + "** | **" + totalCosts + "** | **—** | **—** | **—** |",
-        "",
-        "## Automatic source coverage",
-        "",
-        "| Broker | Stored executions | First execution | Latest execution |",
-        "|---|---:|---|---|",
-        coverageTable,
         "",
         "Ledger coverage: " + (firstAvailable ?? "—") + " to " + (lastAvailable ?? "—") + ".",
         "Cost and tax treatment is shown only when source fields are populated; interest is not inferred. This prevents fabricated net P&L or tax figures.",
