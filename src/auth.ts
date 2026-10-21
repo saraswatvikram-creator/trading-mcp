@@ -24,11 +24,13 @@ type AuthEnv = {
   FIVEPAISA_TOTP_SECRET?: string;
   FIVEPAISA_REDIRECT_URL?: string;
   FIVEPAISA_TOKEN_STORE?: KVNamespace;
+  ICICIDIRECT_MCP_URL?: string;
+  ICICIDIRECT_MCP_ACCESS_TOKEN?: string;
 };
 
 type BrokerResult = {
   broker: string;
-  status: "VALID" | "AUTHENTICATION_REQUIRED" | "FAILED";
+  status: "VALID" | "AUTHENTICATION_REQUIRED" | "FAILED" | "NOT_CONFIGURED";
   message: string;
   action_url: string;
   auth_mode: string;
@@ -147,6 +149,50 @@ async function validateFivePaisa(env: AuthEnv, baseUrl: string): Promise<{valid:
   }
 }
 
+async function validateICICIDirect(env: AuthEnv): Promise<{valid:boolean; message:string; status:"VALID"|"FAILED"|"NOT_CONFIGURED"; action_url:string}> {
+  const configuredUrl = env.ICICIDIRECT_MCP_URL?.trim();
+  const token = env.ICICIDIRECT_MCP_ACCESS_TOKEN;
+  if (!configuredUrl || !token) {
+    return {
+      valid: false,
+      status: "NOT_CONFIGURED",
+      message: "ICICIdirect Breeze verification is not configured. Set ICICIDIRECT_MCP_URL and ICICIDIRECT_MCP_ACCESS_TOKEN as Worker secrets/variables.",
+      action_url: configuredUrl || "",
+    };
+  }
+
+  try {
+    // Accept either the Breeze Worker base URL or its /mcp URL, but always
+    // call the dedicated live session-verification endpoint.
+    const base = new URL(configuredUrl);
+    if (base.protocol !== "https:") {
+      return { valid: false, status: "FAILED", message: "ICICIdirect verification URL must use HTTPS.", action_url: configuredUrl };
+    }
+    const verifyUrl = new URL("/api/verify-session", base.origin);
+    const response = await fetch(verifyUrl.toString(), {
+      method: "GET",
+      headers: {
+        "Authorization": "Bearer " + token,
+        "Cache-Control": "no-store",
+        "Accept": "application/json",
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    let data: any;
+    try { data = await response.json(); } catch {
+      return { valid: false, status: "FAILED", message: "Breeze verification returned invalid JSON (HTTP " + response.status + ").", action_url: configuredUrl };
+    }
+    if (response.ok && data?.brokerSessionVerified === true && data?.brokerConnected === true) {
+      return { valid: true, status: "VALID", message: "ICICIdirect Breeze session live-verified successfully at " + (data.checkedAt ?? "the current check") + ".", action_url: configuredUrl };
+    }
+    const reason = typeof data?.error === "string" ? data.error : "live session verification did not confirm a connected broker";
+    return { valid: false, status: "FAILED", message: "ICICIdirect Breeze session is not verified (" + reason + ", HTTP " + response.status + "). Run Update Auth1 for the Breeze service if broker login is required.", action_url: configuredUrl };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { valid: false, status: "FAILED", message: "ICICIdirect Breeze verification failed: " + reason, action_url: configuredUrl };
+  }
+}
+
 function result(
   broker: string,
   check: {valid:boolean; message:string; token_expiry?:string|null; auth_mode?:string},
@@ -172,12 +218,13 @@ export async function runUpdateAuth(env: AuthEnv, baseUrl: string): Promise<any>
     "m.Stock": new URL("/auth/mstock", baseUrl).toString(),
   };
 
-  const [zerodha, angelone, groww, fivepaisa, mstock] = await Promise.all([
+  const [zerodha, angelone, groww, fivepaisa, mstock, icici] = await Promise.all([
     validateZerodha(env),
     validateAngelOne(env),
     validateGroww(env),
     validateFivePaisa(env, baseUrl),
     validateMStock(env),
+    validateICICIDirect(env),
   ]);
 
   const brokers: BrokerResult[] = [
@@ -186,10 +233,14 @@ export async function runUpdateAuth(env: AuthEnv, baseUrl: string): Promise<any>
     result("Groww", groww, actionUrls.Groww, "API access token + TOTP"),
     result("5Paisa", fivepaisa, actionUrls["5Paisa"], fivepaisa.auth_mode ?? "AUTO_TOTP/OAuth"),
     result("m.Stock", mstock, actionUrls["m.Stock"], "Type A + TOTP"),
+    { broker: "ICICIdirect Breeze", status: icici.status, message: icici.message, action_url: icici.action_url, auth_mode: "Breeze live-session verification", token_expiry: null },
   ];
 
-  const validCount = brokers.filter((b) => b.status === "VALID").length;
-  const allValid = validCount === brokers.length;
+  // Breeze is an optional sixth integration. Its absence or failure must never
+  // block the original five-broker Trading Desk workflow.
+  const coreBrokers = brokers.filter((b) => b.broker !== "ICICIdirect Breeze");
+  const validCount = coreBrokers.filter((b) => b.status === "VALID").length;
+  const allValid = validCount === coreBrokers.length;
   const anyValid = validCount > 0;
 
   return {
@@ -204,6 +255,7 @@ export async function runUpdateAuth(env: AuthEnv, baseUrl: string): Promise<any>
     downstream_ready: anyValid,
     available_brokers: brokers.filter((b) => b.status === "VALID").map((b) => b.broker),
     unavailable_brokers: brokers.filter((b) => b.status !== "VALID").map((b) => b.broker),
+    optional_integrations: { ICICIDirect: { status: icici.status, live_verified: icici.valid, message: icici.message } },
     next_commands: anyValid
       ? ["update trades", "update P/L", "update investments"]
       : [],
