@@ -188,7 +188,11 @@ async function validateICICIDirect(env: AuthEnv): Promise<{valid:boolean; messag
     const reason = typeof data?.error === "string" ? data.error : "live session verification did not confirm a connected broker";
     return { valid: false, status: "FAILED", message: "ICICIdirect Breeze session is not verified (" + reason + ", HTTP " + response.status + "). Run Update Auth1 for the Breeze service if broker login is required.", action_url: configuredUrl };
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    // Do not echo raw network/runtime errors into the auth report; they can
+    // contain internal host details. Keep timeout diagnostics useful but safe.
+    const reason = error instanceof Error && error.name === "TimeoutError"
+      ? "request timed out after 8 seconds"
+      : "network or verification request failed";
     return { valid: false, status: "FAILED", message: "ICICIdirect Breeze verification failed: " + reason, action_url: configuredUrl };
   }
 }
