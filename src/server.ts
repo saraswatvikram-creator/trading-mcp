@@ -35,6 +35,8 @@ type Env = {
   FIVEPAISA_TOTP_SECRET?: string;
   FIVEPAISA_REDIRECT_URL?: string;
   FIVEPAISA_TOKEN_STORE?: KVNamespace;
+  ICICIDIRECT_MCP_URL?: string;
+  ICICIDIRECT_MCP_ACCESS_TOKEN?: string;
 };
 
 // ============================================================
@@ -642,13 +644,13 @@ function createServer(
     "update_auth",
     {
       description:
-        "Run the daily Trading Desk authentication gate. Validate and, where configured, automatically authenticate Zerodha, AngelOne, Groww, 5Paisa and m.Stock. Return broker-specific authentication hyperlinks, final broker status, and Trading Desk readiness. Read-only; never places, modifies, cancels or squares off orders.",
+        "Run the daily Trading Desk authentication gate. Validate Zerodha, AngelOne, Groww, 5Paisa and m.Stock independently, plus optional ICICIdirect Breeze live-session verification when configured. Breeze failure or missing configuration must not block the original five brokers. Read-only; never places, modifies, cancels or squares off orders.",
     },
     async () => {
       const payload = await runUpdateAuth(env, baseUrl);
       const rows = payload.authentication
         .map((item: any, index: number) =>
-          `| ${index + 1} | **${item.broker}** | [Complete Authentication](${item.action_url}) | ${item.status === "VALID" ? "🟢 VALID" : "🔴 UNAVAILABLE"} — ${item.message} |`
+          `| ${index + 1} | **${item.broker}** | ${item.action_url ? `[Open / Verify](${item.action_url})` : "Configure Worker secrets"} | ${item.status === "VALID" ? "🟢 VALID" : item.status === "NOT_CONFIGURED" ? "⚪ NOT CONFIGURED (optional)" : "🔴 UNAVAILABLE"} — ${item.message} |`
         )
         .join("\n");
 
@@ -663,11 +665,11 @@ function createServer(
         "| # | Broker / Component | Action | Status |",
         "|---:|---|---|---|",
         rows,
-        `| 6 | **Zerodha Trading Desk** | Refresh Tools in the ChatGPT plugin | ${toolStatus} |`,
-        `| 7 | **Trading Desk** | Final authentication check | ${payload.status === "READY" ? "🟢 READY" : "🔴 NOT READY"} |`,
+        `| 7 | **Zerodha Trading Desk** | Refresh Tools in the ChatGPT plugin | ${toolStatus} |`,
+        `| 8 | **Trading Desk** | Final authentication check | ${payload.status === "READY" ? "🟢 READY" : payload.status === "PARTIAL_READY" ? "🟡 PARTIAL READY" : "🔴 NOT READY"} |`,
         "",
         payload.status === "READY"
-          ? "### Trading Desk READY — all five brokers authenticated"
+          ? "### Trading Desk READY — all five core brokers authenticated"
           : payload.status === "PARTIAL_READY"
             ? "### Trading Desk PARTIALLY READY — continue with authenticated brokers"
             : "### Trading Desk NOT READY — no broker authenticated",
