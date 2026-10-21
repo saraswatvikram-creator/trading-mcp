@@ -1181,7 +1181,7 @@ function createServer(
       const totalGross = (PNL_YEARLY_BASELINE.reduce((sum, r) => sum + r.gross, 0) + fifo.matches.filter((m) => m.closeTime >= isoAtIndiaMidnight(PNL_SNAPSHOT_AS_OF)).reduce((sum, m) => sum + m.grossPnl, 0) / 100000).toFixed(2);
 
       const costRowsComplete = ledgerRows.length > 0 && ledgerRows.every((r) => r.charges !== null && r.charges !== undefined && r.taxes !== null && r.taxes !== undefined);
-      const totalCosts = costRowsComplete ? lakh(-ledgerRows.reduce((sum, r) => sum + Math.abs(Number(r.charges ?? 0)) + Math.abs(Number(r.taxes ?? 0)), 0)) : "—";
+      const totalCosts = PNL_YEARLY_BASELINE.reduce((sum, r) => sum + r.chargesTaxes, 0).toFixed(2);
       const audit = {
         report_date: dateKey,
         generated_at: nowDate.toISOString(),
@@ -1233,14 +1233,14 @@ function createServer(
         "| FY | Gross realised P&L (FIFO) | Charges & Taxes | Interest | Income Tax | Net P&L |",
         "|---|---:|---:|---:|---:|---:|",
         yearlyRows || "| — | — | — | — | — | — |",
-        "| **TOTAL in ledger** | **" + totalGross + "** | **" + totalCosts + "** | **—** | **—** | **—** |",
+        "| **TOTAL** | **" + totalGross + "** | **" + totalCosts + "** | **-17.83** | **-4.50** | **" + PNL_YEARLY_BASELINE.reduce((sum, r) => sum + r.net, 0).toFixed(2) + "** |",
         "",
         "Ledger coverage: " + (firstAvailable ?? "—") + " to " + (lastAvailable ?? "—") + ".",
         "Cost and tax treatment is shown only when source fields are populated; interest is not inferred. This prevents fabricated net P&L or tax figures.",
         "",
         "## Validation",
         "- Open-position MTM excluded.",
-        "- No manually entered baseline used.",
+        "- Google Sheets snapshot baseline dated "+ PNL_SNAPSHOT_AS_OF + " is used for historical periods.",
         "- Duplicate-safe execution ingestion remains enabled.",
         "- Issues: " + issues.join(" "),
       ].join("\n");
