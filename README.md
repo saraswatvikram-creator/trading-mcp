@@ -89,6 +89,19 @@ The preferred first command each trading day is:
 
 **update auth**
 
+The `update_auth` MCP tool validates the five core broker sessions in parallel and also performs an optional ICICIdirect Breeze live-session check when configured.
+
+#### Optional ICICIdirect Breeze integration
+
+To include ICICIdirect Breeze as an optional sixth row in `Update Auth`, configure these on the **main Trading Desk Cloudflare Worker** (never commit tokens to GitHub):
+
+- `ICICIDIRECT_MCP_URL`: the base URL of the separate `swing-trading-mcp` Worker (for example, `https://swing-trading-mcp.<account>.workers.dev`; the verifier derives `/api/verify-session` from its origin).
+- `ICICIDIRECT_MCP_ACCESS_TOKEN`: the same bearer token configured as `MCP_ACCESS_TOKEN` on the Breeze Worker.
+
+The check sends an authenticated GET to `/api/verify-session` and marks Breeze VALID only when the live response confirms both `brokerSessionVerified: true` and `brokerConnected: true`. It has an 8-second timeout and does not expose tokens in the report. Missing configuration is shown as `NOT CONFIGURED`; a Breeze failure never blocks the original five brokers or changes their readiness calculation.
+
+After deployment, run `Update Auth` and confirm the Breeze row reports live verification. This code change alone does not configure Cloudflare secrets, authenticate the broker, or refresh the ChatGPT tool catalogue. Breeze remains read-only; order placement is disabled.
+
 The `update_auth` MCP tool validates the five broker sessions in parallel:
 
 - Zerodha
