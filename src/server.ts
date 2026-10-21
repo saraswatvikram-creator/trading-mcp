@@ -7,6 +7,7 @@ import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 import { runUpdateAuth, handleAuthRoute } from "./auth";
 import { getLedgerCoverage, persistExecutions, calculateFifoRealisedPnl, type PnlExecution, type PnlBroker, type LedgerExecutionRow } from "./pnl-ledger";
+import { PNL_SNAPSHOT_AS_OF, PNL_YEARLY_BASELINE, PNL_BROKER_BASELINE } from "./pnl-baseline";
 
 type Env = {
   ZERODHA_API_KEY: string;
@@ -1119,28 +1120,32 @@ function createServer(
         const selected = broker ? items.filter((m) => m.broker === broker) : items;
         return selected.length ? lakh(sumMatches(selected)) : "—";
       };
-      const currentFyMatches = fifo.matches.filter((m) => inRange(m.closeTime, periodStart.fy));
-      const allMatches = fifo.matches;
+      const afterSnapshotMatches = fifo.matches.filter((m) => m.closeTime >= isoAtIndiaMidnight(PNL_SNAPSHOT_AS_OF));
+      const afterSnapshotFyMatches = afterSnapshotMatches.filter((m) => inRange(m.closeTime, periodStart.fy));
+      const baselineFyRow = PNL_YEARLY_BASELINE.find((r) => r.fy === fyStartYear);
+      const baselineGrossForBroker = (broker: PnlBroker) => (PNL_BROKER_BASELINE[broker as keyof typeof PNL_BROKER_BASELINE] ?? []).reduce((sum: number, r: any) => sum + r.gross, 0);
+      const baselineCurrentFyForBroker = (broker: PnlBroker) => (PNL_BROKER_BASELINE[broker as keyof typeof PNL_BROKER_BASELINE] ?? []).filter((r: any) => r.fy === fyStartYear).reduce((sum: number, r: any) => sum + r.gross, 0);
+      const sumAfterSnapshot = (items: typeof fifo.matches, broker?: PnlBroker) => items.filter((m) => !broker || m.broker === broker).reduce((sum, m) => sum + m.grossPnl, 0);
       const currentPeriodMatches = {
         today: fifo.matches.filter((m) => inRange(m.closeTime, periodStart.today)),
         week: fifo.matches.filter((m) => inRange(m.closeTime, periodStart.week)),
         month: fifo.matches.filter((m) => inRange(m.closeTime, periodStart.month)),
-        fy: currentFyMatches,
-        all: allMatches,
       };
-      const brokerRows = brokers.map((broker) =>
-        "| " + broker + " | " + fmtPeriod(currentPeriodMatches.today, broker) + " | " +
-        fmtPeriod(currentPeriodMatches.week, broker) + " | " +
-        fmtPeriod(currentPeriodMatches.month, broker) + " | " +
-        fmtPeriod(currentPeriodMatches.fy, broker) + " | " +
-        fmtPeriod(currentPeriodMatches.all, broker) + " |"
-      ).join("\n");
+      const brokerRows = brokers.map((broker) => {
+        const fyBase = baselineCurrentFyForBroker(broker);
+        const allBase = baselineGrossForBroker(broker);
+        const known = Object.prototype.hasOwnProperty.call(PNL_BROKER_BASELINE, broker);
+        return "| " + broker + " | " + fmtPeriod(currentPeriodMatches.today, broker) + " | " +
+          fmtPeriod(currentPeriodMatches.week, broker) + " | " + fmtPeriod(currentPeriodMatches.month, broker) + " | " +
+          (known ? (fyBase + sumAfterSnapshot(afterSnapshotFyMatches, broker) / 100000).toFixed(2) : "—") + " | " +
+          (known ? (allBase + sumAfterSnapshot(afterSnapshotMatches, broker) / 100000).toFixed(2) : "—") + " |";
+      }).join("\n");
+      const baselineTotalAll = PNL_YEARLY_BASELINE.reduce((sum, r) => sum + r.gross, 0);
       const consolidatedRow = "| **Consolidated realised gross P&L** | **" +
-        fmtPeriod(currentPeriodMatches.today) + "** | **" +
-        fmtPeriod(currentPeriodMatches.week) + "** | **" +
+        fmtPeriod(currentPeriodMatches.today) + "** | **" + fmtPeriod(currentPeriodMatches.week) + "** | **" +
         fmtPeriod(currentPeriodMatches.month) + "** | **" +
-        fmtPeriod(currentPeriodMatches.fy) + "** | **" +
-        fmtPeriod(currentPeriodMatches.all) + "** |";
+        (baselineFyRow ? (baselineFyRow.gross + sumAfterSnapshot(afterSnapshotFyMatches) / 100000).toFixed(2) : "—") + "** | **" +
+        (baselineTotalAll + sumAfterSnapshot(afterSnapshotMatches) / 100000).toFixed(2) + "** |";
 
       const availableTimes = ledgerRows.map((r) => r.trade_time).filter((v) => typeof v === "string").sort();
       const firstAvailable = availableTimes[0] ?? null;
@@ -1153,7 +1158,7 @@ function createServer(
       if (ledgerRows.length === 0) issues.push("The execution ledger contains no transactions; realised P&L cannot be computed from an empty ledger.");
       if (hasIncompleteCostData) issues.push("Brokerage and taxes are missing on one or more execution records; net P&L cannot be asserted from the current ledger.");
       if (coverageSummary.some((c) => c.executions === 0)) issues.push("One or more brokers have no stored executions; consolidated all-time history is not complete.");
-      issues.push("Historical coverage is limited to records actually returned by broker APIs and stored in the ledger. No user-entered baseline is used.");
+      issues.push("Historical coverage is limited to records actually returned by broker APIs and stored in the ledger. The Google Sheets snapshot baseline is used as of " + PNL_SNAPSHOT_AS_OF + ".");
       issues.push("Interest is not exposed by the execution feeds used here; net P&L and income tax remain unconfirmed until source-backed values are available.");
       const allHistoryYears = new Set<number>();
       for (const row of ledgerRows) {
@@ -1167,17 +1172,14 @@ function createServer(
       const currentYearForFy = fyStartYear;
       allHistoryYears.add(currentYearForFy);
       const years = [...allHistoryYears].sort((a, b) => a - b);
-      const yearlyRows = years.map((fyYear) => {
-        const start = isoAtIndiaMidnight(fyYear + "-04-01");
-        const end = isoAtIndiaMidnight((fyYear + 1) + "-04-01");
-        const yearMatches = fifo.matches.filter((m) => inRange(m.closeTime, start, end));
-        const gross = yearMatches.length ? lakh(sumMatches(yearMatches)) : "—";
-        const yearExecutions = ledgerRows.filter((r) => inRange(r.trade_time, start, end));
-        const costsComplete = yearExecutions.length > 0 && yearExecutions.every((r) => r.charges !== null && r.charges !== undefined && r.taxes !== null && r.taxes !== undefined);
-        const chargesTaxes = costsComplete ? lakh(-yearExecutions.reduce((sum, r) => sum + Math.abs(Number(r.charges ?? 0)) + Math.abs(Number(r.taxes ?? 0)), 0)) : "—";
-        return "| " + fyYear + "–" + String(fyYear + 1).slice(-2) + " | " + gross + " | " + chargesTaxes + " | — | — | — |";
+      const yearlyRows = PNL_YEARLY_BASELINE.map((base) => {
+        const start = isoAtIndiaMidnight(base.fy + "-04-01");
+        const end = isoAtIndiaMidnight((base.fy + 1) + "-04-01");
+        const added = fifo.matches.filter((m) => m.closeTime >= isoAtIndiaMidnight(PNL_SNAPSHOT_AS_OF) && inRange(m.closeTime, start, end)).reduce((sum, m) => sum + m.grossPnl, 0) / 100000;
+        return "| " + base.fy + "–" + String(base.fy + 1).slice(-2) + " | " + (base.gross + added).toFixed(2) + " | " + base.chargesTaxes.toFixed(2) + " | " + base.interest.toFixed(2) + " | " + base.incomeTax.toFixed(2) + " | " + (base.net + added).toFixed(2) + " |";
       }).join("\n");
-      const totalGross = allMatches.length ? lakh(sumMatches(allMatches)) : "—";
+      const totalGross = (PNL_YEARLY_BASELINE.reduce((sum, r) => sum + r.gross, 0) + fifo.matches.filter((m) => m.closeTime >= isoAtIndiaMidnight(PNL_SNAPSHOT_AS_OF)).reduce((sum, m) => sum + m.grossPnl, 0) / 100000).toFixed(2);
+
       const costRowsComplete = ledgerRows.length > 0 && ledgerRows.every((r) => r.charges !== null && r.charges !== undefined && r.taxes !== null && r.taxes !== undefined);
       const totalCosts = costRowsComplete ? lakh(-ledgerRows.reduce((sum, r) => sum + Math.abs(Number(r.charges ?? 0)) + Math.abs(Number(r.taxes ?? 0)), 0)) : "—";
       const audit = {
@@ -1189,7 +1191,7 @@ function createServer(
         execution_ingestion_status: ingestionStatus,
         execution_ingestion_brokers: ingestionBrokers,
         storage_status: storageStatus,
-        baseline_status: "NOT_USED",
+        baseline_status: "USER_SHEET_SNAPSHOT_AS_OF_" + PNL_SNAPSHOT_AS_OF,
         ledger_execution_count: ledgerRows.length,
         ledger_first_execution: firstAvailable,
         ledger_last_execution: lastAvailable,
@@ -1216,7 +1218,7 @@ function createServer(
         "**Status: " + audit.status + "**",
         "",
         "Update Auth ran automatically: " + authenticationStatus + ". Execution ingestion: " + ingestionStatus + ". Ledger: " + storageStatus + ".",
-        "Both reports below are calculated from the same durable execution ledger; no manually supplied baseline or cross-report reconciliation is used.",
+        "Daily/weekly/monthly figures are calculated from the durable execution ledger. FY/all-time and yearly figures start from the user-provided Google Sheets snapshot dated " + PNL_SNAPSHOT_AS_OF + " and add FIFO gross realised P&L for ledger matches after that cutoff. Historical charges, interest and tax remain snapshot values until source-verified.",
         "Table 1 is reconstructed realised **gross** P&L using FIFO matching for executions currently stored. Open positions/MTM are excluded. “All Time in Ledger” is not a claim of full account history: pre-ledger trades absent from broker API responses cannot be reconstructed. A dash means source data is unavailable, not zero.",
         "",
         "## Table 1 — P&L Summary (₹ lakh)",
