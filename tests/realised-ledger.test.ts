@@ -636,3 +636,20 @@ test("range reader follows KV pagination and rejects invalid date windows", asyn
   await assert.rejects(() => readExecutionRange(kv, "Zerodha", "2026/10/23", "2026-10-24"), /valid YYYY-MM-DD/);
   await assert.rejects(() => readExecutionRange(kv, "Zerodha", "2026-10-25", "2026-10-24"), /startDate <= endDate/);
 });
+
+
+test("partition reader rejects impossible calendar dates, not just malformed date strings", async () => {
+  class MemoryKV implements LedgerKV {
+    async get(_key: string) { return null; }
+    async put(_key: string, _value: string) {}
+  }
+  const kv = new MemoryKV();
+  await assert.rejects(
+    () => readExecutionPartition(kv, "Zerodha", "2026-02-30"),
+    /valid YYYY-MM-DD calendar date/,
+  );
+  await assert.rejects(
+    () => readExecutionPartition(kv, "Zerodha", "2026-13-01"),
+    /valid YYYY-MM-DD calendar date/,
+  );
+});
