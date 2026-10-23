@@ -1120,12 +1120,6 @@ function createServer(
         const selected = broker ? items.filter((m) => m.broker === broker) : items;
         return selected.length ? lakh(sumMatches(selected)) : "—";
       };
-      const afterSnapshotMatches = fifo.matches.filter((m) => m.closeTime >= isoAtIndiaMidnight(PNL_SNAPSHOT_AS_OF));
-      const afterSnapshotFyMatches = afterSnapshotMatches.filter((m) => inRange(m.closeTime, periodStart.fy));
-      const baselineFyRow = PNL_YEARLY_BASELINE.find((r) => r.fy === fyStartYear);
-      const baselineGrossForBroker = (broker: PnlBroker) => (PNL_BROKER_BASELINE[broker as keyof typeof PNL_BROKER_BASELINE] ?? []).reduce((sum: number, r: any) => sum + r.gross, 0);
-      const baselineCurrentFyForBroker = (broker: PnlBroker) => (PNL_BROKER_BASELINE[broker as keyof typeof PNL_BROKER_BASELINE] ?? []).filter((r: any) => r.fy === fyStartYear).reduce((sum: number, r: any) => sum + r.gross, 0);
-      const sumAfterSnapshot = (items: typeof fifo.matches, broker?: PnlBroker) => items.filter((m) => !broker || m.broker === broker).reduce((sum, m) => sum + m.grossPnl, 0);
       const currentPeriodMatches = {
         today: fifo.matches.filter((m) => inRange(m.closeTime, periodStart.today)),
         week: fifo.matches.filter((m) => inRange(m.closeTime, periodStart.week)),
