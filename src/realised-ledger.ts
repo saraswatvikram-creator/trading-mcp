@@ -97,9 +97,13 @@ export function validateExecution(input: unknown): ValidationResult {
   return { valid: true, errors: [], record };
 }
 
-/** Stable per-broker execution identity; same trade ID across brokers is not a collision. */
-export function executionKey(r: Pick<ExecutionRecord, "broker" | "broker_trade_id">): string {
-  return "realised-ledger:v1:trade:" + encodeURIComponent(r.broker) + ":" + encodeURIComponent(r.broker_trade_id);
+/**
+ * Stable execution identity. Include the execution date because some broker trade
+ * IDs are only unique within a trading session. Broker is always part of the key.
+ */
+export function executionKey(r: Pick<ExecutionRecord, "broker" | "broker_trade_id" | "executed_at">): string {
+  const executionDate = new Date(r.executed_at).toISOString().slice(0, 10);
+  return "realised-ledger:v1:trade:" + encodeURIComponent(r.broker) + ":" + executionDate + ":" + encodeURIComponent(r.broker_trade_id);
 }
 
 /**
