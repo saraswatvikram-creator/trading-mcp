@@ -494,3 +494,19 @@ test("coverage gate fails closed for missing broker evidence and invalid windows
     /valid YYYY-MM-DD/i,
   );
 });
+
+test("coverage gate rejects impossible calendar dates and duplicate broker evidence", () => {
+  assert.throws(
+    () => evaluateBrokerCoverage({ startDate: "2026-02-30", endDate: "2026-10-23" }, []),
+    /valid YYYY-MM-DD/i,
+  );
+  const valid: BrokerCoverageEvidence = {
+    broker: "Zerodha", coveredFrom: "2026-04-01", coveredThrough: "2026-10-23",
+    sourceVerified: true, openingInventoryVerified: true, reconciliationComplete: true,
+    unmatchedExecutionCount: 0, conflictCount: 0, chargesAndTaxesVerified: true,
+  };
+  assert.throws(
+    () => evaluateBrokerCoverage({ startDate: "2026-04-01", endDate: "2026-10-23" }, [valid, valid]),
+    /Duplicate coverage evidence/i,
+  );
+});
