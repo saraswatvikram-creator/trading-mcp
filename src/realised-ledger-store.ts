@@ -141,7 +141,15 @@ export async function readExecutionPartition(
   broker: BrokerName,
   indiaTradingDate: string,
 ): Promise<ExecutionRecord[]> {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(indiaTradingDate)) throw new Error("Trading date must be YYYY-MM-DD");
+  const date = new Date(indiaTradingDate + "T00:00:00Z");
+  const validShape = indiaTradingDate.length === 10
+    && indiaTradingDate[4] === "-"
+    && indiaTradingDate[7] === "-"
+    && [...indiaTradingDate.slice(0, 4), ...indiaTradingDate.slice(5, 7), ...indiaTradingDate.slice(8, 10)]
+      .every((character) => character >= "0" && character <= "9");
+  if (!validShape || !Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== indiaTradingDate) {
+    throw new Error("Trading date must be a valid YYYY-MM-DD calendar date");
+  }
   const text = await kv.get(partitionKey(broker, indiaTradingDate));
   if (!text) return [];
   const parsed: unknown = JSON.parse(text);
