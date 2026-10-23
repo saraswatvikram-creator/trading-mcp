@@ -9,7 +9,7 @@ function normalizeBrokerTimestamp(value: unknown): string {
   const trimmed = value.trim();
   // Broker tradebook timestamps are India-local when no UTC offset is supplied.
   // Attach the explicit IST offset so runtime timezone cannot change interpretation.
-  const hasZone = /(?:Z|[+-]\\d{2}:?\\d{2})$/i.test(trimmed);
+  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(trimmed);
   const normalized = hasZone ? trimmed : trimmed.replace(" ", "T") + "+05:30";
   return Number.isFinite(Date.parse(normalized)) ? new Date(normalized).toISOString() : "";
 }
