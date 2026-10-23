@@ -531,6 +531,38 @@ export function registerMStockTools(server: any, env: MStockEnv): void {
   );
 
   server.registerTool(
+    "mstock_tradebook",
+    {
+      description: "Fetch the authenticated m.Stock Type A tradebook for the broker-provided tradebook period. This is source data only, not a complete historical ledger. Read-only.",
+      inputSchema: { totp: z.string().regex(/^\\d{6}$/).optional() },
+    },
+    async ({ totp }) => {
+      try {
+        const r = await liveOrTotp(env, totp);
+        if (!r.live) return result(r.auth);
+        const { apiKey } = config(env);
+        const token = await storedToken(env);
+        if (!token) throw new Error("MSTOCK_AUTH_REQUIRED: No m.Stock access token is stored.");
+        const response = await get("/openapi/typea/tradebook", apiKey, token);
+        const rows = Array.isArray(response?.data) ? response.data : [];
+        return result({
+          status: "LIVE",
+          broker: "m.Stock",
+          auth_mode: "TYPE_A_TOTP",
+          trade_count: rows.length,
+          trades: rows,
+          source: "m.Stock Type A /openapi/typea/tradebook",
+          completeness: "BROKER_ENDPOINT_SCOPE_ONLY; historical coverage and opening inventory not verified",
+          read_only: true,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return result({ status: "ERROR", broker: "m.Stock", message: message.replace(/^MSTOCK_[A-Z_]+:\\s*/, ""), read_only: true });
+      }
+    }
+  );
+
+  server.registerTool(
     "mstock_margin",
     {
       description: "Read live m.Stock Type A fund summary, available balance, collateral and margin utilisation. Automatically authenticates with configured TOTP if the session is missing or expired. Read-only.",

@@ -1,0 +1,675 @@
+import { test } from "node:test";
+import { persistExecutions, readExecutionPartition, type LedgerKV } from "../src/realised-ledger-store.ts";
+import assert from "node:assert/strict";
+import {
+  calculateFifoRealisedPnl,
+  deduplicateExecutions,
+  executionKey,
+  inventoryKey,
+  validateExecution,
+  type ExecutionRecord,
+} from "../src/realised-ledger.ts";
+
+function fill(overrides: Partial<ExecutionRecord> = {}): ExecutionRecord {
+  return {
+    schema_version: 1,
+    broker: "Zerodha",
+    broker_trade_id: "T1",
+    broker_order_id: "O1",
+    exchange: "NFO",
+    instrument: "NIFTY26OCT24000CE",
+    product: "NRML",
+    side: "SELL",
+    quantity: 50,
+    price: 100,
+    executed_at: "2026-10-23T09:30:00.000Z",
+    source: "test",
+    ...overrides,
+  };
+}
+
+test("validateExecution normalizes valid timestamps and rejects invalid quantities", () => {
+  const good = validateExecution(fill());
+  assert.equal(good.valid, true);
+  assert.equal(good.record?.executed_at, "2026-10-23T09:30:00.000Z");
+  const bad = validateExecution(fill({ quantity: 0 }));
+  assert.equal(bad.valid, false);
+  assert.ok(bad.errors.some((e) => e.includes("quantity")));
+});
+
+test("executionKey scopes identity by broker, date, and trade ID", () => {
+  const a = fill();
+  const sameOtherBroker = fill({ broker: "Groww" });
+  const sameNextDay = fill({ executed_at: "2026-10-24T09:30:00.000Z" });
+  assert.notEqual(executionKey(a), executionKey(sameOtherBroker));
+  assert.notEqual(executionKey(a), executionKey(sameNextDay));
+  // UTC date is still 23 Oct, but this timestamp is 24 Oct in India.
+  const lateIndia = fill({ executed_at: "2026-10-23T20:00:00.000Z" });
+  const sameIndiaDate = fill({ executed_at: "2026-10-24T01:00:00.000Z" });
+  assert.equal(executionKey(lateIndia), executionKey(sameIndiaDate));
+});
+
+test("deduplicateExecutions removes identical duplicates and flags conflicting duplicates", () => {
+  const a = fill();
+  const exact = deduplicateExecutions([a, { ...a }]);
+  assert.equal(exact.records.length, 1);
+  assert.equal(exact.duplicate_count, 1);
+  assert.equal(exact.conflicts.length, 0);
+
+  const conflict = deduplicateExecutions([a, fill({ price: 101 })]);
+  assert.equal(conflict.records.length, 1);
+  assert.equal(conflict.conflicts.length, 1);
+});
+
+test("FIFO realises profit on closing a short option against verified opening inventory", () => {
+  const sell = fill({ broker_trade_id: "SELL1", side: "SELL", quantity: 50, price: 100 });
+  const buy = fill({ broker_trade_id: "BUY1", side: "BUY", quantity: 50, price: 40, executed_at: "2026-10-23T10:00:00.000Z" });
+  const result = calculateFifoRealisedPnl([sell, buy], {}, true);
+  assert.equal(result.status, "COMPLETE_FOR_SUPPLIED_INVENTORY");
+  assert.equal(result.realised_gross_pnl, 3000);
+  assert.equal(result.matches.length, 1);
+  assert.equal(result.matches[0].entry_side, "SELL");
+  assert.equal(result.matches[0].exit_side, "BUY");
+});
+
+test("incomplete opening inventory is explicitly flagged and does not invent realised P&L", () => {
+  const buy = fill({ broker_trade_id: "BUY1", side: "BUY", quantity: 50, price: 40 });
+  const sell = fill({ broker_trade_id: "SELL1", side: "SELL", quantity: 50, price: 100, executed_at: "2026-10-23T10:00:00.000Z" });
+  const result = calculateFifoRealisedPnl([buy, sell], {}, false);
+  assert.equal(result.status, "INCOMPLETE_OPENING_INVENTORY");
+  assert.equal(result.realised_gross_pnl, 0);
+  assert.ok(Object.keys(result.unmatched_closing_quantity).length > 0);
+  assert.ok(result.notes.some((n) => n.includes("not verified")));
+});
+
+test("FIFO does not net identical instruments across different brokers", () => {
+  const open = fill({ broker: "Zerodha", broker_trade_id: "Z1", side: "SELL", quantity: 50, price: 100 });
+  const close = fill({ broker: "Groww", broker_trade_id: "G1", side: "BUY", quantity: 50, price: 40, executed_at: "2026-10-23T10:00:00.000Z" });
+  const result = calculateFifoRealisedPnl([open, close], {}, true);
+  assert.equal(result.realised_gross_pnl, 0);
+  assert.equal(result.matches.length, 0);
+});
+
+test("FIFO handles partial closes and leaves the residual short quantity open", () => {
+  const sell = fill({ broker_trade_id: "SELL1", side: "SELL", quantity: 100, price: 100 });
+  const buy = fill({ broker_trade_id: "BUY1", side: "BUY", quantity: 40, price: 60, executed_at: "2026-10-23T10:00:00.000Z" });
+  const result = calculateFifoRealisedPnl([sell, buy], {}, true);
+  assert.equal(result.realised_gross_pnl, 1600);
+  assert.equal(result.matches.length, 1);
+  assert.equal(result.ending_inventory["Zerodha|NFO|NRML|NIFTY26OCT24000CE"][0].signed_quantity, -60);
+});
+
+test("FIFO handles a position reversal after closing the existing long lot", () => {
+  const openLong = fill({ broker_trade_id: "BUY1", side: "BUY", quantity: 30, price: 80 });
+  const sellThroughZero = fill({ broker_trade_id: "SELL1", side: "SELL", quantity: 50, price: 100, executed_at: "2026-10-23T10:00:00.000Z" });
+  const buyBack = fill({ broker_trade_id: "BUY2", side: "BUY", quantity: 20, price: 90, executed_at: "2026-10-23T11:00:00.000Z" });
+  const result = calculateFifoRealisedPnl([openLong, sellThroughZero, buyBack], {}, true);
+  assert.equal(result.realised_gross_pnl, 800);
+  assert.equal(result.matches.length, 2);
+  assert.equal(result.ending_inventory["Zerodha|NFO|NRML|NIFTY26OCT24000CE"].length, 0);
+});
+
+test("KV execution persistence is idempotent and partitions by broker and India trading date", async () => {
+  class MemoryKV implements LedgerKV {
+    values = new Map<string, string>();
+    async get(key: string) { return this.values.get(key) ?? null; }
+    async put(key: string, value: string) { this.values.set(key, value); }
+  }
+  const kv = new MemoryKV();
+  const a = fill({ executed_at: "2026-10-23T20:00:00.000Z" });
+  const first = await persistExecutions(kv, [a]);
+  assert.equal(first[0].accepted, 1);
+  const second = await persistExecutions(kv, [a]);
+  assert.equal(second[0].accepted, 0);
+  assert.equal(second[0].duplicate_count, 1);
+  assert.equal((await readExecutionPartition(kv, "Zerodha", "2026-10-24")).length, 1);
+  assert.equal((await readExecutionPartition(kv, "Groww", "2026-10-24")).length, 0);
+});
+
+test("KV execution persistence refuses conflicting duplicate identity without overwriting", async () => {
+  class MemoryKV implements LedgerKV {
+    values = new Map<string, string>();
+    async get(key: string) { return this.values.get(key) ?? null; }
+    async put(key: string, value: string) { this.values.set(key, value); }
+  }
+  const kv = new MemoryKV();
+  const a = fill();
+  await persistExecutions(kv, [a]);
+  const key = [...kv.values.keys()][0];
+  const before = kv.values.get(key);
+  const conflict = await persistExecutions(kv, [fill({ price: 999 })]);
+  assert.ok(conflict[0].conflicts.length > 0);
+  assert.equal(kv.values.get(key), before);
+});
+
+
+test("KV persistence refuses to overwrite a corrupt existing partition", async () => {
+  class MemoryKV implements LedgerKV {
+    values = new Map<string, string>();
+    async get(key: string) { return this.values.get(key) ?? null; }
+    async put(key: string, value: string) { this.values.set(key, value); }
+  }
+  const kv = new MemoryKV();
+  const key = "realised-ledger:v1:partition:Zerodha:2026-10-23";
+  kv.values.set(key, "{not-json");
+  const result = await persistExecutions(kv, [fill()]);
+  assert.equal(result[0].accepted, 0);
+  assert.match(result[0].rejected[0].errors[0], /corrupt/i);
+  assert.equal(kv.values.get(key), "{not-json");
+});
+
+test("KV read rejects invalid date syntax and invalid records in stored partitions", async () => {
+  class MemoryKV implements LedgerKV {
+    values = new Map<string, string>();
+    async get(key: string) { return this.values.get(key) ?? null; }
+    async put(key: string, value: string) { this.values.set(key, value); }
+  }
+  const kv = new MemoryKV();
+  await assert.rejects(() => readExecutionPartition(kv, "Zerodha", "2026/10/23"), /YYYY-MM-DD/);
+  const key = "realised-ledger:v1:partition:Zerodha:2026-10-23";
+  kv.values.set(key, JSON.stringify([{ ...fill(), quantity: -1 }]));
+  await assert.rejects(() => readExecutionPartition(kv, "Zerodha", "2026-10-23"), /invalid records/i);
+});
+
+
+test("KV reader rejects valid-looking records stored under the wrong broker/date partition", async () => {
+  class MemoryKV implements LedgerKV {
+    values = new Map<string, string>();
+    async get(key: string) { return this.values.get(key) ?? null; }
+    async put(key: string, value: string) { this.values.set(key, value); }
+  }
+  const kv = new MemoryKV();
+  const key = "realised-ledger:v1:partition:Zerodha:2026-10-23";
+  kv.values.set(key, JSON.stringify([fill({ broker: "Groww" })]));
+  await assert.rejects(
+    () => readExecutionPartition(kv, "Zerodha", "2026-10-23"),
+    /partition identity mismatch/i,
+  );
+});
+
+import { normalizeZerodhaTrades, normalizeAngelOneTradeBook, normalizeGrowwOrderTrades, normalizeFivePaisaTradeBook, normalizeMStockTradeBook } from "../src/realised-ledger-adapters.ts";
+
+test("Zerodha adapter normalizes executed trades and rejects malformed rows without dropping valid fills", () => {
+  const result = normalizeZerodhaTrades({
+    status: "success",
+    data: [
+      {
+        trade_id: 12345,
+        order_id: 67890,
+        exchange: "NFO",
+        tradingsymbol: "NIFTY26OCT24000CE",
+        product: "NRML",
+        transaction_type: "SELL",
+        quantity: 65,
+        average_price: 102.5,
+        fill_timestamp: "2026-10-23 09:30:00",
+      },
+      {
+        trade_id: "BAD",
+        order_id: "BADORDER",
+        exchange: "NFO",
+        tradingsymbol: "NIFTY26OCT24000CE",
+        transaction_type: "BUY",
+        quantity: 0,
+        average_price: 20,
+        fill_timestamp: "2026-10-23 09:31:00",
+      },
+    ],
+  });
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].broker, "Zerodha");
+  assert.equal(result.records[0].broker_trade_id, "12345");
+  assert.equal(result.records[0].side, "SELL");
+  assert.equal(result.records[0].quantity, 65);
+  assert.equal(result.records[0].executed_at, "2026-10-23T04:00:00.000Z");
+  assert.equal(result.rejected.length, 1);
+});
+
+test("Zerodha adapter refuses payloads without a data array", () => {
+  const result = normalizeZerodhaTrades({ status: "success", data: null });
+  assert.equal(result.records.length, 0);
+  assert.equal(result.rejected.length, 1);
+});
+
+
+test("FIFO inventory key separates exchange and product for the same symbol", () => {
+  const base = fill();
+  assert.notEqual(inventoryKey(base), inventoryKey({ ...base, product: "MIS" }));
+  assert.notEqual(inventoryKey(base), inventoryKey({ ...base, exchange: "BSE" }));
+  const first = fill({ side: "SELL", price: 100, product: "NRML" });
+  const otherProduct = fill({ side: "BUY", price: 40, product: "MIS", executed_at: "2026-10-23T10:00:00.000Z" });
+  const result = calculateFifoRealisedPnl([first, otherProduct], {}, true);
+  assert.equal(result.matches.length, 0);
+  assert.equal(result.realised_gross_pnl, 0);
+});
+
+
+test("Zerodha adapter preserves explicit timestamp offsets instead of treating them as IST", () => {
+  const result = normalizeZerodhaTrades({
+    data: [{
+      trade_id: "OFFSET1",
+      order_id: "ORDER1",
+      exchange: "NFO",
+      tradingsymbol: "NIFTY26OCT24000CE",
+      product: "NRML",
+      transaction_type: "BUY",
+      quantity: 65,
+      price: 25,
+      fill_timestamp: "2026-10-23T09:30:00+05:30",
+    }],
+  });
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].executed_at, "2026-10-23T04:00:00.000Z");
+  assert.equal(result.rejected.length, 0);
+});
+
+test("FIFO rejects invalid opening inventory rather than calculating from corrupted lots", () => {
+  const trade = fill({ side: "BUY", broker_trade_id: "BUY1" });
+  const key = inventoryKey(trade);
+  assert.throws(
+    () => calculateFifoRealisedPnl([trade], { [key]: [{ signed_quantity: 0, price: 100 }] }, true),
+    /Invalid opening inventory lot/i,
+  );
+  assert.throws(
+    () => calculateFifoRealisedPnl([trade], { [key]: [{ signed_quantity: 10, price: Number.NaN }] }, true),
+    /Invalid opening inventory lot/i,
+  );
+});
+
+
+test("Angel One adapter normalizes documented tradebook fields using an explicit India trade date", () => {
+  const result = normalizeAngelOneTradeBook({
+    status: true,
+    data: [{
+      exchange: "NFO",
+      producttype: "CARRYFORWARD",
+      tradingsymbol: "NIFTY26OCT24000CE",
+      transactiontype: "SELL",
+      fillprice: "102.50",
+      fillsize: "65",
+      orderid: "ORDER-A1",
+      fillid: "FILL-A1",
+      filltime: "13:27:53",
+    }],
+  }, "2026-10-23");
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].broker, "AngelOne");
+  assert.equal(result.records[0].broker_trade_id, "FILL-A1");
+  assert.equal(result.records[0].quantity, 65);
+  assert.equal(result.records[0].price, 102.5);
+  assert.equal(result.records[0].executed_at, "2026-10-23T07:57:53.000Z");
+});
+
+test("Angel One adapter refuses to infer the trade date", () => {
+  const result = normalizeAngelOneTradeBook({ data: [] }, "");
+  assert.equal(result.records.length, 0);
+  assert.match(result.rejected[0].errors[0], /trade date/i);
+});
+
+test("Groww adapter normalizes completed documented trade rows and rejects non-completed rows", () => {
+  const result = normalizeGrowwOrderTrades({
+    status: "SUCCESS",
+    payload: {
+      trade_list: [
+        {
+          price: 75.25,
+          quantity: 65,
+          groww_order_id: "ORDER-G1",
+          groww_trade_id: "TRADE-G1",
+          trade_status: "COMPLETED",
+          trading_symbol: "NIFTY26OCT24000CE",
+          exchange: "NFO",
+          segment: "FNO",
+          product: "NRML",
+          transaction_type: "BUY",
+          trade_date_time: "2026-10-23T10:15:00+05:30",
+        },
+        {
+          price: 75.25,
+          quantity: 65,
+          groww_order_id: "ORDER-G2",
+          groww_trade_id: "TRADE-G2",
+          trade_status: "PENDING",
+          trading_symbol: "NIFTY26OCT24000CE",
+          exchange: "NFO",
+          product: "NRML",
+          transaction_type: "BUY",
+          trade_date_time: "2026-10-23T10:16:00+05:30",
+        },
+      ],
+    },
+  });
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].broker, "Groww");
+  assert.equal(result.records[0].broker_trade_id, "TRADE-G1");
+  assert.equal(result.records[0].executed_at, "2026-10-23T04:45:00.000Z");
+  assert.equal(result.rejected.length, 1);
+});
+
+
+
+
+test("Groww adapter rejects unsuccessful responses even if a trade_list field is present", () => {
+  const result = normalizeGrowwOrderTrades({
+    status: "FAILURE",
+    payload: { trade_list: [] },
+  });
+  assert.equal(result.records.length, 0);
+  assert.match(result.rejected[0].errors[0], /successful trade response/i);
+});
+
+test("5Paisa adapter normalizes documented Xstream tradebook fields and epoch timestamp", () => {
+  const result = normalizeFivePaisaTradeBook({
+    body: {
+      Status: 0,
+      TradeBookDetail: [{
+        BuySell: "S",
+        DelvIntra: "I",
+        Exch: "N",
+        ExchType: "D",
+        ExchOrderID: "EXORDER-5P",
+        ExchangeTradeID: "EXTRADE-5P",
+        ExchangeTradeTime: "/Date(1707364850000+0530)/",
+        Qty: 50,
+        Rate: 2.55,
+        ScripName: "NIFTY 08 Feb 2024 CE 22300.00",
+      }],
+    },
+  });
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].broker, "5Paisa");
+  assert.equal(result.records[0].broker_trade_id, "EXTRADE-5P");
+  assert.equal(result.records[0].exchange, "NFO");
+  assert.equal(result.records[0].side, "SELL");
+  assert.equal(result.records[0].quantity, 50);
+  assert.equal(result.records[0].executed_at, "2024-02-08T04:00:50.000Z");
+});
+
+test("5Paisa adapter accepts the deployed authenticated dashboard trades wrapper", () => {
+  const result = normalizeFivePaisaTradeBook({
+    status: "CONNECTED",
+    read_only: true,
+    trades: [{
+      Exch: "N", ExchType: "D", ScripCode: 54102, ScripName: "NIFTY26N0323800CE",
+      BuySell: "B", Qty: 65, PendingQty: 0, OrgQty: 1755, Rate: 9.65,
+      ExchOrderID: "1000000129456426", ExchangeTradeID: "4022938",
+      ExchangeTradeTime: "/Date(1792755397000+0530)/", TradeType: "ON",
+      DelvIntra: "D", Multiplier: 1,
+    }],
+  });
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].broker, "5Paisa");
+  assert.equal(result.records[0].broker_trade_id, "4022938");
+  assert.equal(result.records[0].exchange, "NFO");
+  assert.equal(result.records[0].side, "BUY");
+  assert.equal(result.records[0].price, 9.65);
+  assert.equal(result.rejected.length, 0);
+});
+
+test("5Paisa adapter does not mistake invalid sessions for an empty tradebook", () => {
+  const result = normalizeFivePaisaTradeBook({ body: { Status: 9, Message: "Invalid Session", TradeBookDetail: [] } });
+  assert.equal(result.records.length, 0);
+  assert.match(result.rejected[0].errors[0], /session error/i);
+});
+
+test("m.Stock adapter normalizes documented Type A tradebook fields", () => {
+  const result = normalizeMStockTradeBook({
+    status: "success",
+    data: [{
+      BUY_SELL: "Sell",
+      EXCHANGE: "NFO",
+      EXCH_ORDER_NUMBER: "ORDER-MS1",
+      ORDER_DATE_TIME: "23-10-2026 13:08:42",
+      PRICE: 6.98,
+      PRODUCT: "NRML",
+      QUANTITY: 65,
+      SYMBOL: "NIFTY26OCT24000CE",
+      TRADE_NUMBER: "TRADE-MS1",
+    }],
+  });
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].broker, "m.Stock");
+  assert.equal(result.records[0].broker_trade_id, "TRADE-MS1");
+  assert.equal(result.records[0].side, "SELL");
+  assert.equal(result.records[0].exchange, "NFO");
+  assert.equal(result.records[0].executed_at, "2026-10-23T07:38:42.000Z");
+});
+
+test("m.Stock adapter rejects unsuccessful payloads instead of returning an empty ledger", () => {
+  const result = normalizeMStockTradeBook({ status: "error", data: null });
+  assert.equal(result.records.length, 0);
+  assert.match(result.rejected[0].errors[0], /successful tradebook/i);
+});
+
+
+test("FIFO refuses to guess order when same-instrument executions share a timestamp", () => {
+  const sameTime = "2026-10-23T09:30:00.000Z";
+  const first = fill({ broker_trade_id: "SAME1", side: "SELL", executed_at: sameTime });
+  const second = fill({ broker_trade_id: "SAME2", side: "BUY", price: 40, executed_at: sameTime });
+  assert.throws(
+    () => calculateFifoRealisedPnl([first, second], {}, true),
+    /Ambiguous FIFO order/i,
+  );
+});
+
+test("FIFO permits same timestamp across different instruments", () => {
+  const sameTime = "2026-10-23T09:30:00.000Z";
+  const first = fill({ broker_trade_id: "SAME1", side: "SELL", executed_at: sameTime });
+  const second = fill({
+    broker_trade_id: "SAME2",
+    side: "BUY",
+    price: 40,
+    instrument: "NIFTY26OCT24100CE",
+    executed_at: sameTime,
+  });
+  const result = calculateFifoRealisedPnl([first, second], {}, true);
+  assert.equal(result.matches.length, 0);
+});
+
+import { evaluateBrokerCoverage, canPublishConsolidated, type BrokerCoverageEvidence } from "../src/realised-pnl-coverage.ts";
+
+test("coverage gate blocks incomplete periods and only publishes verified net P&L", () => {
+  const brokers: BrokerCoverageEvidence[] = (["Zerodha", "AngelOne", "Groww", "5Paisa", "m.Stock"] as const).map((broker) => ({
+    broker,
+    coveredFrom: "2026-04-01",
+    coveredThrough: "2026-10-23",
+    sourceVerified: true,
+    openingInventoryVerified: true,
+    reconciliationComplete: true,
+    unmatchedExecutionCount: 0,
+    conflictCount: 0,
+    chargesAndTaxesVerified: true,
+  }));
+  const allReady = evaluateBrokerCoverage({ startDate: "2026-04-01", endDate: "2026-10-23" }, brokers);
+  assert.equal(canPublishConsolidated(allReady, "gross"), true);
+  assert.equal(canPublishConsolidated(allReady, "net"), true);
+
+  const partial = brokers.map((b) => ({ ...b }));
+  partial[2].coveredFrom = "2026-10-01";
+  const blocked = evaluateBrokerCoverage({ startDate: "2026-04-01", endDate: "2026-10-23" }, partial);
+  assert.equal(blocked.find((d) => d.broker === "Groww")?.publishGross, false);
+  assert.equal(canPublishConsolidated(blocked, "gross"), false);
+});
+
+test("coverage gate keeps gross and net publication separate when charges are unverified", () => {
+  const evidence: BrokerCoverageEvidence[] = (["Zerodha", "AngelOne", "Groww", "5Paisa", "m.Stock"] as const).map((broker) => ({
+    broker, coveredFrom: "2026-04-01", coveredThrough: "2026-10-23",
+    sourceVerified: true, openingInventoryVerified: true, reconciliationComplete: true,
+    unmatchedExecutionCount: 0, conflictCount: 0, chargesAndTaxesVerified: broker !== "Groww",
+  }));
+  const decisions = evaluateBrokerCoverage({ startDate: "2026-04-01", endDate: "2026-10-23" }, evidence);
+  const groww = decisions.find((d) => d.broker === "Groww");
+  assert.equal(groww?.publishGross, true);
+  assert.equal(groww?.publishNet, false);
+  assert.equal(canPublishConsolidated(decisions, "gross"), true);
+  assert.equal(canPublishConsolidated(decisions, "net"), false);
+});
+
+test("coverage gate fails closed for missing broker evidence and invalid windows", () => {
+  const decisions = evaluateBrokerCoverage({ startDate: "2026-04-01", endDate: "2026-10-23" }, []);
+  assert.equal(decisions.length, 5);
+  assert.ok(decisions.every((d) => !d.publishGross && !d.publishNet));
+  assert.equal(canPublishConsolidated(decisions.slice(0, 4), "gross"), false);
+  assert.throws(
+    () => evaluateBrokerCoverage({ startDate: "2026-10-24", endDate: "2026-10-23" }, []),
+    /valid YYYY-MM-DD/i,
+  );
+});
+
+test("coverage gate rejects impossible calendar dates and duplicate broker evidence", () => {
+  assert.throws(
+    () => evaluateBrokerCoverage({ startDate: "2026-02-30", endDate: "2026-10-23" }, []),
+    /valid YYYY-MM-DD/i,
+  );
+  const valid: BrokerCoverageEvidence = {
+    broker: "Zerodha", coveredFrom: "2026-04-01", coveredThrough: "2026-10-23",
+    sourceVerified: true, openingInventoryVerified: true, reconciliationComplete: true,
+    unmatchedExecutionCount: 0, conflictCount: 0, chargesAndTaxesVerified: true,
+  };
+  assert.throws(
+    () => evaluateBrokerCoverage({ startDate: "2026-04-01", endDate: "2026-10-23" }, [valid, valid]),
+    /Duplicate coverage evidence/i,
+  );
+});
+
+test("consolidated coverage gate rejects duplicate broker decisions even at full list length", () => {
+  const brokers: BrokerCoverageEvidence[] = (["Zerodha", "AngelOne", "Groww", "5Paisa", "m.Stock"] as const).map((broker) => ({
+    broker, coveredFrom: "2026-04-01", coveredThrough: "2026-10-23",
+    sourceVerified: true, openingInventoryVerified: true, reconciliationComplete: true,
+    unmatchedExecutionCount: 0, conflictCount: 0, chargesAndTaxesVerified: true,
+  }));
+  const decisions = evaluateBrokerCoverage({ startDate: "2026-04-01", endDate: "2026-10-23" }, brokers);
+  const duplicate = [...decisions.slice(0, 4), { ...decisions[0] }];
+  assert.equal(duplicate.length, 5);
+  assert.equal(canPublishConsolidated(duplicate, "gross"), false);
+});
+
+test("coverage gate fails closed when runtime evidence flags are malformed", () => {
+  const malformed = {
+    broker: "Zerodha", coveredFrom: "2026-04-01", coveredThrough: "2026-10-23",
+    sourceVerified: "true", openingInventoryVerified: true, reconciliationComplete: true,
+    unmatchedExecutionCount: 0, conflictCount: 0, chargesAndTaxesVerified: true,
+  } as unknown as BrokerCoverageEvidence;
+  const decisions = evaluateBrokerCoverage({ startDate: "2026-04-01", endDate: "2026-10-23" }, [malformed]);
+  const zerodha = decisions.find((d) => d.broker === "Zerodha");
+  assert.equal(zerodha?.publishGross, false);
+  assert.ok(zerodha?.blockers.some((b) => b.includes("must be a boolean")));
+});
+
+test("coverage gate blocks gross P&L when opening inventory is not verified even if no unmatched fills were reported", () => {
+  const brokers: BrokerCoverageEvidence[] = (["Zerodha", "AngelOne", "Groww", "5Paisa", "m.Stock"] as const).map((broker) => ({
+    broker,
+    coveredFrom: "2026-04-01",
+    coveredThrough: "2026-10-23",
+    sourceVerified: true,
+    openingInventoryVerified: broker !== "Groww",
+    reconciliationComplete: true,
+    unmatchedExecutionCount: 0,
+    conflictCount: 0,
+    chargesAndTaxesVerified: true,
+  }));
+  const decisions = evaluateBrokerCoverage({ startDate: "2026-04-01", endDate: "2026-10-23" }, brokers);
+  const groww = decisions.find((d) => d.broker === "Groww");
+  assert.equal(groww?.publishGross, false);
+  assert.equal(groww?.publishNet, false);
+  assert.ok(groww?.blockers.some((b) => /opening inventory is not verified/i.test(b)));
+  assert.equal(canPublishConsolidated(decisions, "gross"), false);
+});
+
+
+import { readExecutionRange, type LedgerKVWithList } from "../src/realised-ledger-store.ts";
+
+test("range reader returns only the requested broker and inclusive India trading-date range", async () => {
+  class MemoryKV implements LedgerKVWithList {
+    values = new Map<string, string>();
+    async get(key: string) { return this.values.get(key) ?? null; }
+    async put(key: string, value: string) { this.values.set(key, value); }
+    async list(options: { prefix?: string; cursor?: string; limit?: number } = {}) {
+      const names = [...this.values.keys()].filter((key) => key.startsWith(options.prefix ?? ""));
+      const offset = options.cursor ? Number(options.cursor) : 0;
+      const limit = options.limit ?? 1000;
+      const page = names.slice(offset, offset + limit);
+      const next = offset + page.length;
+      return {
+        keys: page.map((name) => ({ name })),
+        list_complete: next >= names.length,
+        ...(next < names.length ? { cursor: String(next) } : {}),
+      };
+    }
+  }
+  const kv = new MemoryKV();
+  await persistExecutions(kv, [
+    fill({ broker_trade_id: "Z23", executed_at: "2026-10-23T09:30:00.000Z" }),
+    fill({ broker_trade_id: "Z24", executed_at: "2026-10-24T09:30:00.000Z" }),
+    fill({ broker_trade_id: "Z25", executed_at: "2026-10-25T09:30:00.000Z" }),
+    fill({ broker: "Groww", broker_trade_id: "G24", executed_at: "2026-10-24T09:30:00.000Z" }),
+  ]);
+  const result = await readExecutionRange(kv, "Zerodha", "2026-10-24", "2026-10-25");
+  assert.deepEqual(result.map((row) => row.broker_trade_id), ["Z24", "Z25"]);
+});
+
+test("range reader follows KV pagination and rejects invalid date windows", async () => {
+  class MemoryKV implements LedgerKVWithList {
+    values = new Map<string, string>();
+    async get(key: string) { return this.values.get(key) ?? null; }
+    async put(key: string, value: string) { this.values.set(key, value); }
+    async list(options: { prefix?: string; cursor?: string; limit?: number } = {}) {
+      const names = [...this.values.keys()].filter((key) => key.startsWith(options.prefix ?? ""));
+      const offset = options.cursor ? Number(options.cursor) : 0;
+      const limit = Math.min(options.limit ?? 1000, 1);
+      const page = names.slice(offset, offset + limit);
+      const next = offset + page.length;
+      return {
+        keys: page.map((name) => ({ name })),
+        list_complete: next >= names.length,
+        ...(next < names.length ? { cursor: String(next) } : {}),
+      };
+    }
+  }
+  const kv = new MemoryKV();
+  await persistExecutions(kv, [
+    fill({ broker_trade_id: "Z23", executed_at: "2026-10-23T09:30:00.000Z" }),
+    fill({ broker_trade_id: "Z24", executed_at: "2026-10-24T09:30:00.000Z" }),
+  ]);
+  const result = await readExecutionRange(kv, "Zerodha", "2026-10-23", "2026-10-24");
+  assert.equal(result.length, 2);
+  await assert.rejects(() => readExecutionRange(kv, "Zerodha", "2026/10/23", "2026-10-24"), /valid YYYY-MM-DD/);
+  await assert.rejects(() => readExecutionRange(kv, "Zerodha", "2026-10-25", "2026-10-24"), /startDate <= endDate/);
+});
+
+
+test("partition reader rejects impossible calendar dates, not just malformed date strings", async () => {
+  class MemoryKV implements LedgerKV {
+    async get(_key: string) { return null; }
+    async put(_key: string, _value: string) {}
+  }
+  const kv = new MemoryKV();
+  await assert.rejects(
+    () => readExecutionPartition(kv, "Zerodha", "2026-02-30"),
+    /valid YYYY-MM-DD calendar date/,
+  );
+  await assert.rejects(
+    () => readExecutionPartition(kv, "Zerodha", "2026-13-01"),
+    /valid YYYY-MM-DD calendar date/,
+  );
+});
+
+
+import { resolveRealisedPnlPeriods } from "../src/realised-pnl-periods.ts";
+
+test("report periods use India-local dates and Monday-based weeks", () => {
+  const periods = resolveRealisedPnlPeriods(new Date("2026-10-23T20:00:00.000Z"));
+  assert.deepEqual(periods, [
+    { label: "Today", startDate: "2026-10-24", endDate: "2026-10-24" },
+    { label: "This Week", startDate: "2026-10-19", endDate: "2026-10-24" },
+    { label: "This Month", startDate: "2026-10-01", endDate: "2026-10-24" },
+    { label: "FY 2026–27", startDate: "2026-04-01", endDate: "2026-10-24" },
+  ]);
+});
+
+test("report periods resolve the prior fiscal year before April", () => {
+  const periods = resolveRealisedPnlPeriods(new Date("2026-03-31T06:00:00.000Z"));
+  assert.equal(periods[0].startDate, "2026-03-31");
+  assert.equal(periods[3].label, "FY 2025–26");
+  assert.equal(periods[3].startDate, "2025-04-01");
+});

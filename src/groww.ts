@@ -714,6 +714,115 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
   );
 
   server.registerTool(
+    "groww_tradebook",
+    {
+      description:
+        "Fetch Groww F&O execution fills by enumerating order pages and each order's trade pages. Current broker API scope only; this does not claim historical completeness. Read-only.",
+    },
+    async () => {
+      const orders: any[] = [];
+      const orderErrors: any[] = [];
+      const maxOrderPages = 20;
+      const maxTradePages = 20;
+      let tokenExpiry: string | null = null;
+      let orderPagesFetched = 0;
+      let tradePagesFetched = 0;
+
+      for (let page = 0; page < maxOrderPages; page++) {
+        try {
+          const response = await growwGetWithAutoRefresh(
+            "/v1/order/list?segment=FNO&page=" + page + "&page_size=100",
+            env
+          );
+          tokenExpiry = response.expiry;
+          const rows = response.data?.payload?.order_list;
+          if (!Array.isArray(rows)) {
+            orderErrors.push({ page, error: "Unexpected order-list response schema" });
+            break;
+          }
+          orderPagesFetched++;
+          orders.push(...rows);
+          if (rows.length < 100) break;
+          if (page === maxOrderPages - 1) {
+            orderErrors.push({ error: "Order pagination safety limit reached; order coverage may be incomplete" });
+          }
+        } catch (error) {
+          orderErrors.push({ page, error: error instanceof Error ? error.message : String(error) });
+          break;
+        }
+      }
+
+      const trades: any[] = [];
+      const tradeErrors: any[] = [];
+      for (const order of orders) {
+        const orderId = String(order?.groww_order_id ?? order?.order_id ?? order?.id ?? "").trim();
+        if (!orderId) {
+          if (String(order?.order_status ?? order?.status ?? "").toUpperCase() === "EXECUTED") {
+            tradeErrors.push({ order_id: null, error: "Executed order has no recognized Groww order ID" });
+          }
+          continue;
+        }
+        const orderStatus = String(order?.order_status ?? order?.status ?? "").toUpperCase();
+        if (orderStatus && !["EXECUTED", "PARTIALLY_EXECUTED", "PARTIALLY FILLED", "PARTIALLY_FILLED"].includes(orderStatus)) continue;
+
+        let orderComplete = false;
+        for (let page = 0; page < maxTradePages; page++) {
+          try {
+            const response = await growwGetWithAutoRefresh(
+              "/v1/order/trades/" + encodeURIComponent(orderId) + "?segment=FNO&page=" + page + "&page_size=50",
+              env
+            );
+            tokenExpiry = response.expiry ?? tokenExpiry;
+            const payload = response.data?.payload;
+            const rows = Array.isArray(payload?.trade_list) ? payload.trade_list : null;
+            if (!rows) {
+              tradeErrors.push({ order_id: orderId, page, error: "Unexpected per-order trades response schema" });
+              break;
+            }
+            tradePagesFetched++;
+            trades.push(...rows.map((trade: any) => ({ ...trade, groww_order_id: orderId })));
+            if (rows.length < 50) {
+              orderComplete = true;
+              break;
+            }
+            if (page === maxTradePages - 1) {
+              tradeErrors.push({ order_id: orderId, error: "Trade pagination safety limit reached; order fills may be incomplete" });
+            }
+          } catch (error) {
+            tradeErrors.push({ order_id: orderId, page, error: error instanceof Error ? error.message : String(error) });
+            break;
+          }
+        }
+        if (!orderComplete && !tradeErrors.some((e: any) => e.order_id === orderId)) {
+          tradeErrors.push({ order_id: orderId, error: "Trade pagination did not reach a confirmed final page" });
+        }
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            status: orderErrors.length === 0 && tradeErrors.length === 0 ? "LIVE" : "PARTIAL",
+            broker: "Groww",
+            authenticated: true,
+            order_count: orders.length,
+            order_pages_fetched: orderPagesFetched,
+            trade_count: trades.length,
+            trade_pages_fetched: tradePagesFetched,
+            orders,
+            trades,
+            errors: { order_errors: orderErrors, trade_errors: tradeErrors },
+            token_expiry: tokenExpiry,
+            source: "Groww F&O order list + /v1/order/trades/{groww_order_id}",
+            completeness: "BROKER_ENDPOINT_SCOPE_ONLY; historical coverage and opening inventory not verified",
+            read_only: true
+          }, null, 2)
+        }]
+      };
+    }
+  );
+
+  server.registerTool(
     "groww_dashboard",
     {
       description:

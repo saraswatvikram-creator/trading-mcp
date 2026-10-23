@@ -2,7 +2,7 @@ name: Build Validation
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/realised-pnl-ledger-core]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -24,3 +24,6 @@ jobs:
 
       - name: Build
         run: npm run deploy -- --dry-run
+
+      - name: Test realised P&L ledger
+        run: npm test
