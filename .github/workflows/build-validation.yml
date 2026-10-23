@@ -2,7 +2,7 @@ name: Build Validation
 
 on:
   push:
-    branches: [main]
+    branches: [main, feature/realised-pnl-ledger-core]
   pull_request:
     branches: [main]
   workflow_dispatch:
