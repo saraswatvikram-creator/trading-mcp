@@ -162,7 +162,16 @@ export function calculateFifoRealisedPnl(
 ): FifoResult {
   const lots: Record<string, InventoryLot[]> = {};
   for (const [key, values] of Object.entries(openingInventory)) {
-    lots[key] = values.map((lot) => ({ ...lot }));
+    if (!Array.isArray(values)) throw new Error(`Opening inventory for "${key}" must be an array.`);
+    lots[key] = values.map((lot, index) => {
+      if (!lot || typeof lot !== "object" ||
+          typeof lot.signed_quantity !== "number" || !Number.isFinite(lot.signed_quantity) || lot.signed_quantity === 0 ||
+          typeof lot.price !== "number" || !Number.isFinite(lot.price) || lot.price < 0 ||
+          (lot.opened_at !== undefined && (typeof lot.opened_at !== "string" || !Number.isFinite(Date.parse(lot.opened_at))))) {
+        throw new Error(`Invalid opening inventory lot at "${key}" index ${index}; quantity must be finite/non-zero, price finite/non-negative, and opened_at parseable when supplied.`);
+      }
+      return { ...lot };
+    });
   }
   const matches: RealisedMatch[] = [];
   const unmatched: Record<string, number> = {};
