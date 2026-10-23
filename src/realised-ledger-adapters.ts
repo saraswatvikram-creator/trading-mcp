@@ -223,11 +223,11 @@ function normalizeMStockTimestamp(value: unknown): string {
 /** Normalize the documented m.Stock Type A tradebook response. */
 export function normalizeMStockTradeBook(payload: unknown): AdapterResult {
   const root = payload && typeof payload === "object" ? payload as Record<string, unknown> : null;
-  const rows = Array.isArray(root?.data) ? root.data : null;
-  if (!rows) return { records: [], rejected: [{ index: -1, errors: ["m.Stock tradebook response must contain a data array."] }] };
   if (String(root?.status ?? "").toLowerCase() !== "success") {
     return { records: [], rejected: [{ index: -1, errors: ["m.Stock did not report a successful tradebook response."] }] };
   }
+  const rows = Array.isArray(root?.data) ? root.data : null;
+  if (!rows) return { records: [], rejected: [{ index: -1, errors: ["m.Stock tradebook response must contain a data array."] }] };
   const records: ExecutionRecord[] = [];
   const rejected: AdapterResult["rejected"] = [];
   rows.forEach((row, index) => {
