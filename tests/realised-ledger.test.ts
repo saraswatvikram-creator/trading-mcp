@@ -555,3 +555,23 @@ test("coverage gate fails closed when runtime evidence flags are malformed", () 
   assert.equal(zerodha?.publishGross, false);
   assert.ok(zerodha?.blockers.some((b) => b.includes("must be a boolean")));
 });
+
+test("coverage gate blocks gross P&L when opening inventory is not verified even if no unmatched fills were reported", () => {
+  const brokers: BrokerCoverageEvidence[] = (["Zerodha", "AngelOne", "Groww", "5Paisa", "m.Stock"] as const).map((broker) => ({
+    broker,
+    coveredFrom: "2026-04-01",
+    coveredThrough: "2026-10-23",
+    sourceVerified: true,
+    openingInventoryVerified: broker !== "Groww",
+    reconciliationComplete: true,
+    unmatchedExecutionCount: 0,
+    conflictCount: 0,
+    chargesAndTaxesVerified: true,
+  }));
+  const decisions = evaluateBrokerCoverage({ startDate: "2026-04-01", endDate: "2026-10-23" }, brokers);
+  const groww = decisions.find((d) => d.broker === "Groww");
+  assert.equal(groww?.publishGross, false);
+  assert.equal(groww?.publishNet, false);
+  assert.ok(groww?.blockers.some((b) => /opening inventory is not verified/i.test(b)));
+  assert.equal(canPublishConsolidated(decisions, "gross"), false);
+});
