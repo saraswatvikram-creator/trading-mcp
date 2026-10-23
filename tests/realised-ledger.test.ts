@@ -408,3 +408,28 @@ test("m.Stock adapter rejects unsuccessful payloads instead of returning an empt
   assert.equal(result.records.length, 0);
   assert.match(result.rejected[0].errors[0], /successful tradebook/i);
 });
+
+
+test("FIFO refuses to guess order when same-instrument executions share a timestamp", () => {
+  const sameTime = "2026-10-23T09:30:00.000Z";
+  const first = fill({ broker_trade_id: "SAME1", side: "SELL", executed_at: sameTime });
+  const second = fill({ broker_trade_id: "SAME2", side: "BUY", price: 40, executed_at: sameTime });
+  assert.throws(
+    () => calculateFifoRealisedPnl([first, second], {}, true),
+    /Ambiguous FIFO order/i,
+  );
+});
+
+test("FIFO permits same timestamp across different instruments", () => {
+  const sameTime = "2026-10-23T09:30:00.000Z";
+  const first = fill({ broker_trade_id: "SAME1", side: "SELL", executed_at: sameTime });
+  const second = fill({
+    broker_trade_id: "SAME2",
+    side: "BUY",
+    price: 40,
+    instrument: "NIFTY26OCT24100CE",
+    executed_at: sameTime,
+  });
+  const result = calculateFifoRealisedPnl([first, second], {}, true);
+  assert.equal(result.matches.length, 0);
+});
