@@ -38,6 +38,23 @@ function partitionKey(broker: BrokerName, date: string): string {
   return PREFIX + encodeURIComponent(broker) + ":" + date;
 }
 
+function partitionIdentity(key: string): { broker: string; date: string } | null {
+  if (!key.startsWith(PREFIX)) return null;
+  const suffix = key.slice(PREFIX.length);
+  const separator = suffix.lastIndexOf(":");
+  if (separator < 1) return null;
+  try {
+    return { broker: decodeURIComponent(suffix.slice(0, separator)), date: suffix.slice(separator + 1) };
+  } catch {
+    return null;
+  }
+}
+
+function recordsMatchPartition(records: ExecutionRecord[], key: string): boolean {
+  const identity = partitionIdentity(key);
+  return !!identity && records.every((record) => record.broker === identity.broker && indiaDate(record.executed_at) === identity.date);
+}
+
 /**
  * Persist normalized fills in broker/day partitions. The per-partition cap keeps
  * an unusually large day from growing one KV value without bound. This is an
@@ -75,6 +92,7 @@ export async function persistExecutions(
         const checked = parsed.map(validateExecution);
         if (checked.some((x) => !x.valid || !x.record)) throw new Error("partition contains invalid records");
         current = checked.map((x) => x.record as ExecutionRecord);
+        if (!recordsMatchPartition(current, key)) throw new Error("partition identity mismatch");
       } catch {
         results.push({
           accepted: 0, duplicate_count: 0,
@@ -130,5 +148,7 @@ export async function readExecutionPartition(
   if (!Array.isArray(parsed)) throw new Error("Ledger partition is corrupt.");
   const checked = parsed.map(validateExecution);
   if (checked.some((x) => !x.valid || !x.record)) throw new Error("Ledger partition contains invalid records.");
-  return checked.map((x) => x.record as ExecutionRecord);
+  const records = checked.map((x) => x.record as ExecutionRecord);
+  if (!recordsMatchPartition(records, partitionKey(broker, indiaTradingDate))) throw new Error("Ledger partition identity mismatch.");
+  return records;
 }
