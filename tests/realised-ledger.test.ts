@@ -575,3 +575,64 @@ test("coverage gate blocks gross P&L when opening inventory is not verified even
   assert.ok(groww?.blockers.some((b) => /opening inventory is not verified/i.test(b)));
   assert.equal(canPublishConsolidated(decisions, "gross"), false);
 });
+
+
+import { readExecutionRange, type LedgerKVWithList } from "../src/realised-ledger-store.ts";
+
+test("range reader returns only the requested broker and inclusive India trading-date range", async () => {
+  class MemoryKV implements LedgerKVWithList {
+    values = new Map<string, string>();
+    async get(key: string) { return this.values.get(key) ?? null; }
+    async put(key: string, value: string) { this.values.set(key, value); }
+    async list(options: { prefix?: string; cursor?: string; limit?: number } = {}) {
+      const names = [...this.values.keys()].filter((key) => key.startsWith(options.prefix ?? ""));
+      const offset = options.cursor ? Number(options.cursor) : 0;
+      const limit = options.limit ?? 1000;
+      const page = names.slice(offset, offset + limit);
+      const next = offset + page.length;
+      return {
+        keys: page.map((name) => ({ name })),
+        list_complete: next >= names.length,
+        ...(next < names.length ? { cursor: String(next) } : {}),
+      };
+    }
+  }
+  const kv = new MemoryKV();
+  await persistExecutions(kv, [
+    fill({ broker_trade_id: "Z23", executed_at: "2026-10-23T09:30:00.000Z" }),
+    fill({ broker_trade_id: "Z24", executed_at: "2026-10-24T09:30:00.000Z" }),
+    fill({ broker_trade_id: "Z25", executed_at: "2026-10-25T09:30:00.000Z" }),
+    fill({ broker: "Groww", broker_trade_id: "G24", executed_at: "2026-10-24T09:30:00.000Z" }),
+  ]);
+  const result = await readExecutionRange(kv, "Zerodha", "2026-10-24", "2026-10-25");
+  assert.deepEqual(result.map((row) => row.broker_trade_id), ["Z24", "Z25"]);
+});
+
+test("range reader follows KV pagination and rejects invalid date windows", async () => {
+  class MemoryKV implements LedgerKVWithList {
+    values = new Map<string, string>();
+    async get(key: string) { return this.values.get(key) ?? null; }
+    async put(key: string, value: string) { this.values.set(key, value); }
+    async list(options: { prefix?: string; cursor?: string; limit?: number } = {}) {
+      const names = [...this.values.keys()].filter((key) => key.startsWith(options.prefix ?? ""));
+      const offset = options.cursor ? Number(options.cursor) : 0;
+      const limit = Math.min(options.limit ?? 1000, 1);
+      const page = names.slice(offset, offset + limit);
+      const next = offset + page.length;
+      return {
+        keys: page.map((name) => ({ name })),
+        list_complete: next >= names.length,
+        ...(next < names.length ? { cursor: String(next) } : {}),
+      };
+    }
+  }
+  const kv = new MemoryKV();
+  await persistExecutions(kv, [
+    fill({ broker_trade_id: "Z23", executed_at: "2026-10-23T09:30:00.000Z" }),
+    fill({ broker_trade_id: "Z24", executed_at: "2026-10-24T09:30:00.000Z" }),
+  ]);
+  const result = await readExecutionRange(kv, "Zerodha", "2026-10-23", "2026-10-24");
+  assert.equal(result.length, 2);
+  await assert.rejects(() => readExecutionRange(kv, "Zerodha", "2026/10/23", "2026-10-24"), /valid YYYY-MM-DD/);
+  await assert.rejects(() => readExecutionRange(kv, "Zerodha", "2026-10-25", "2026-10-24"), /startDate <= endDate/);
+});
