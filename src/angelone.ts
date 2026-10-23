@@ -303,6 +303,51 @@ export function registerAngelOneTools(server: any, env: AngelOneEnv): void {
   );
 
   server.registerTool(
+    "angelone_tradebook",
+    {
+      description: "Authenticate to Angel One SmartAPI and return the broker's current tradebook. Source data only; historical coverage and opening inventory are not implied. Read-only.",
+    },
+    async () => {
+      try {
+        const login = await angelOneLogin(env);
+        const trades = await angelOneGet(
+          "https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/getTradeBook",
+          env,
+          login.jwtToken
+        );
+        const rows = Array.isArray(trades?.data) ? trades.data : [];
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              status: "LIVE",
+              broker: "Angel One",
+              authenticated: true,
+              trade_count: rows.length,
+              trades: rows,
+              source: "Angel One SmartAPI getTradeBook",
+              completeness: "BROKER_ENDPOINT_SCOPE_ONLY; historical coverage and opening inventory not verified",
+              read_only: true
+            }, null, 2)
+          }]
+        };
+      } catch (error) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              status: "ERROR",
+              broker: "Angel One",
+              message: error instanceof Error ? error.message : String(error),
+              read_only: true
+            }, null, 2)
+          }]
+        };
+      }
+    }
+  );
+
+  server.registerTool(
     "angelone_positions",
     {
       description: "Authenticate to AngelOne SmartAPI using generated TOTP and return current positions. Read-only.",
