@@ -102,7 +102,14 @@ export function validateExecution(input: unknown): ValidationResult {
  * IDs are only unique within a trading session. Broker is always part of the key.
  */
 export function executionKey(r: Pick<ExecutionRecord, "broker" | "broker_trade_id" | "executed_at">): string {
-  const executionDate = new Date(r.executed_at).toISOString().slice(0, 10);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(r.executed_at));
+  const dateParts = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const executionDate = dateParts.year + "-" + dateParts.month + "-" + dateParts.day;
   return "realised-ledger:v1:trade:" + encodeURIComponent(r.broker) + ":" + executionDate + ":" + encodeURIComponent(r.broker_trade_id);
 }
 
