@@ -86,9 +86,13 @@ export function evaluateBrokerCoverage(
       blockers.push("Conflicting execution identities remain.");
     }
 
+    // Gross realised P&L depends on execution history and inventory evidence,
+    // not on whether deductions have been verified. Keep deduction blockers
+    // separate so missing charges/taxes do not suppress a valid gross figure.
     const grossBlockers = blockers.length > 0;
-    const netBlockers = grossBlockers || item.chargesAndTaxesVerified !== true;
-    if (item.chargesAndTaxesVerified !== true) blockers.push("Charges and taxes are not verified.");
+    const deductionsVerified = item.chargesAndTaxesVerified === true;
+    const netBlockers = grossBlockers || !deductionsVerified;
+    if (!deductionsVerified) blockers.push("Charges and taxes are not verified.");
 
     return {
       broker,
