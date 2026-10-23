@@ -653,3 +653,23 @@ test("partition reader rejects impossible calendar dates, not just malformed dat
     /valid YYYY-MM-DD calendar date/,
   );
 });
+
+
+import { resolveRealisedPnlPeriods } from "../src/realised-pnl-periods.ts";
+
+test("report periods use India-local dates and Monday-based weeks", () => {
+  const periods = resolveRealisedPnlPeriods(new Date("2026-10-23T20:00:00.000Z"));
+  assert.deepEqual(periods, [
+    { label: "Today", startDate: "2026-10-24", endDate: "2026-10-24" },
+    { label: "This Week", startDate: "2026-10-19", endDate: "2026-10-24" },
+    { label: "This Month", startDate: "2026-10-01", endDate: "2026-10-24" },
+    { label: "FY 2026–27", startDate: "2026-04-01", endDate: "2026-10-24" },
+  ]);
+});
+
+test("report periods resolve the prior fiscal year before April", () => {
+  const periods = resolveRealisedPnlPeriods(new Date("2026-03-31T06:00:00.000Z"));
+  assert.equal(periods[0].startDate, "2026-03-31");
+  assert.equal(periods[3].label, "FY 2025–26");
+  assert.equal(periods[3].startDate, "2025-04-01");
+});
