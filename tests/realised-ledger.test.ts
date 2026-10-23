@@ -41,6 +41,10 @@ test("executionKey scopes identity by broker, date, and trade ID", () => {
   const sameNextDay = fill({ executed_at: "2026-10-24T09:30:00.000Z" });
   assert.notEqual(executionKey(a), executionKey(sameOtherBroker));
   assert.notEqual(executionKey(a), executionKey(sameNextDay));
+  // UTC date is still 23 Oct, but this timestamp is 24 Oct in India.
+  const lateIndia = fill({ executed_at: "2026-10-23T20:00:00.000Z" });
+  const sameIndiaDate = fill({ executed_at: "2026-10-24T01:00:00.000Z" });
+  assert.equal(executionKey(lateIndia), executionKey(sameIndiaDate));
 });
 
 test("deduplicateExecutions removes identical duplicates and flags conflicting duplicates", () => {
