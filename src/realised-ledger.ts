@@ -142,6 +142,11 @@ export function deduplicateExecutions(records: ExecutionRecord[]): {
   return { records: [...byKey.values()].sort((a, b) => Date.parse(a.executed_at) - Date.parse(b.executed_at)), duplicate_count, conflicts };
 }
 
+/** Stable inventory key; positions with different exchange or product codes must not be netted. */
+export function inventoryKey(record: Pick<ExecutionRecord, "broker" | "exchange" | "product" | "instrument">): string {
+  return [record.broker, record.exchange ?? "", record.product ?? "", record.instrument].join("|");
+}
+
 /**
  * Calculate gross realised P&L with FIFO matching.
  *
@@ -164,7 +169,7 @@ export function calculateFifoRealisedPnl(
   const ordered = [...executions].sort((a, b) => Date.parse(a.executed_at) - Date.parse(b.executed_at));
 
   for (const trade of ordered) {
-    const key = trade.broker + "|" + trade.instrument;
+    const key = inventoryKey(trade);
     const inventory = lots[key] ?? (lots[key] = []);
     let remaining = trade.quantity;
     const incomingSigned = trade.side === "BUY" ? remaining : -remaining;
