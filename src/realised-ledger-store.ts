@@ -152,3 +152,68 @@ export async function readExecutionPartition(
   if (!recordsMatchPartition(records, partitionKey(broker, indiaTradingDate))) throw new Error("Ledger partition identity mismatch.");
   return records;
 }
+
+
+export interface LedgerKVListResult {
+  keys: Array<{ name: string }>;
+  list_complete: boolean;
+  cursor?: string;
+}
+
+export interface LedgerKVWithList extends LedgerKV {
+  list(options?: { prefix?: string; cursor?: string; limit?: number }): Promise<LedgerKVListResult>;
+}
+
+/**
+ * Read a broker's persisted executions across a date range.
+ *
+ * This requires a KV implementation with list support (Cloudflare KV has it).
+ * It reads only the selected broker's partition prefix, follows every cursor,
+ * validates each partition, and never treats missing dates as proof of coverage.
+ * Coverage evidence must be evaluated separately before publishing P&L.
+ */
+export async function readExecutionRange(
+  kv: LedgerKVWithList,
+  broker: BrokerName,
+  startDate: string,
+  endDate: string,
+): Promise<ExecutionRecord[]> {
+  const validDate = (value: string) => {
+    if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(value)) return false;
+    const date = new Date(value + "T00:00:00Z");
+    return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  };
+  if (!validDate(startDate) || !validDate(endDate) || startDate > endDate) {
+    throw new Error("Execution range requires valid YYYY-MM-DD dates with startDate <= endDate.");
+  }
+
+  const prefix = PREFIX + encodeURIComponent(broker) + ":";
+  const keys: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await kv.list({ prefix, limit: 1000, ...(cursor ? { cursor } : {}) });
+    if (!page || !Array.isArray(page.keys)) throw new Error("Ledger KV list returned an invalid response.");
+    for (const item of page.keys) {
+      if (typeof item?.name === "string") keys.push(item.name);
+    }
+    if (page.list_complete) break;
+    if (!page.cursor || page.cursor === cursor) throw new Error("Ledger KV list pagination did not advance.");
+    cursor = page.cursor;
+  } while (true);
+
+  const selected = keys
+    .map((key) => ({ key, identity: partitionIdentity(key) }))
+    .filter((item) => item.identity?.broker === broker
+      && validDate(item.identity.date)
+      && item.identity.date >= startDate
+      && item.identity.date <= endDate)
+    .sort((a, b) => (a.identity?.date ?? "").localeCompare(b.identity?.date ?? ""));
+
+  const all: ExecutionRecord[] = [];
+  for (const item of selected) {
+    const records = await readExecutionPartition(kv, broker, item.identity!.date);
+    all.push(...records);
+  }
+  return all.sort((a, b) => a.executed_at.localeCompare(b.executed_at)
+    || a.broker_trade_id.localeCompare(b.broker_trade_id));
+}
