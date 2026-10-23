@@ -510,3 +510,27 @@ test("coverage gate rejects impossible calendar dates and duplicate broker evide
     /Duplicate coverage evidence/i,
   );
 });
+
+test("consolidated coverage gate rejects duplicate broker decisions even at full list length", () => {
+  const brokers: BrokerCoverageEvidence[] = (["Zerodha", "AngelOne", "Groww", "5Paisa", "m.Stock"] as const).map((broker) => ({
+    broker, coveredFrom: "2026-04-01", coveredThrough: "2026-10-23",
+    sourceVerified: true, openingInventoryVerified: true, reconciliationComplete: true,
+    unmatchedExecutionCount: 0, conflictCount: 0, chargesAndTaxesVerified: true,
+  }));
+  const decisions = evaluateBrokerCoverage({ startDate: "2026-04-01", endDate: "2026-10-23" }, brokers);
+  const duplicate = [...decisions.slice(0, 4), { ...decisions[0] }];
+  assert.equal(duplicate.length, 5);
+  assert.equal(canPublishConsolidated(duplicate, "gross"), false);
+});
+
+test("coverage gate fails closed when runtime evidence flags are malformed", () => {
+  const malformed = {
+    broker: "Zerodha", coveredFrom: "2026-04-01", coveredThrough: "2026-10-23",
+    sourceVerified: "true", openingInventoryVerified: true, reconciliationComplete: true,
+    unmatchedExecutionCount: 0, conflictCount: 0, chargesAndTaxesVerified: true,
+  } as unknown as BrokerCoverageEvidence;
+  const decisions = evaluateBrokerCoverage({ startDate: "2026-04-01", endDate: "2026-10-23" }, [malformed]);
+  const zerodha = decisions.find((d) => d.broker === "Zerodha");
+  assert.equal(zerodha?.publishGross, false);
+  assert.ok(zerodha?.blockers.some((b) => b.includes("must be a boolean")));
+});
