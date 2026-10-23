@@ -76,7 +76,7 @@ export function normalizeZerodhaTrades(payload: unknown): AdapterResult {
 
 /** Normalize documented Angel One SmartAPI getTradeBook rows for a known India trade date. */
 export function normalizeAngelOneTradeBook(payload: unknown, indiaTradeDate: string): AdapterResult {
-  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(indiaTradeDate) ||
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(indiaTradeDate) ||
       Number.isNaN(Date.parse(indiaTradeDate + "T00:00:00+05:30"))) {
     return { records: [], rejected: [{ index: -1, errors: ["Angel One trade date must be YYYY-MM-DD."] }] };
   }
@@ -92,7 +92,7 @@ export function normalizeAngelOneTradeBook(payload: unknown, indiaTradeDate: str
     }
     const raw = row as Record<string, unknown>;
     const fillTime = typeof raw.filltime === "string" ? raw.filltime.trim() : "";
-    const timestamp = /^\\d{2}:\\d{2}:\\d{2}$/.test(fillTime)
+    const timestamp = /^\d{2}:\d{2}:\d{2}$/.test(fillTime)
       ? normalizeBrokerTimestamp(indiaTradeDate + "T" + fillTime + "+05:30")
       : normalizeBrokerTimestamp(raw.filltime);
     const candidate = {
