@@ -140,3 +140,32 @@ test("KV execution persistence refuses conflicting duplicate identity without ov
   assert.ok(conflict[0].conflicts.length > 0);
   assert.equal(kv.values.get(key), before);
 });
+
+
+test("KV persistence refuses to overwrite a corrupt existing partition", async () => {
+  class MemoryKV implements LedgerKV {
+    values = new Map<string, string>();
+    async get(key: string) { return this.values.get(key) ?? null; }
+    async put(key: string, value: string) { this.values.set(key, value); }
+  }
+  const kv = new MemoryKV();
+  const key = "realised-ledger:v1:partition:Zerodha:2026-10-23";
+  kv.values.set(key, "{not-json");
+  const result = await persistExecutions(kv, [fill()]);
+  assert.equal(result[0].accepted, 0);
+  assert.match(result[0].rejected[0].errors[0], /corrupt/i);
+  assert.equal(kv.values.get(key), "{not-json");
+});
+
+test("KV read rejects invalid date syntax and invalid records in stored partitions", async () => {
+  class MemoryKV implements LedgerKV {
+    values = new Map<string, string>();
+    async get(key: string) { return this.values.get(key) ?? null; }
+    async put(key: string, value: string) { this.values.set(key, value); }
+  }
+  const kv = new MemoryKV();
+  await assert.rejects(() => readExecutionPartition(kv, "Zerodha", "2026/10/23"), /YYYY-MM-DD/);
+  const key = "realised-ledger:v1:partition:Zerodha:2026-10-23";
+  kv.values.set(key, JSON.stringify([{ ...fill(), quantity: -1 }]));
+  await assert.rejects(() => readExecutionPartition(kv, "Zerodha", "2026-10-23"), /invalid records/i);
+});
