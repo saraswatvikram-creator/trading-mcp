@@ -160,10 +160,14 @@ export function normalizeGrowwOrderTrades(payload: unknown): AdapterResult {
 
 function normalizeFivePaisaDate(value: unknown): string {
   if (typeof value !== "string") return "";
-  const match = value.match(/^\\/Date\\((-?\\d+)(?:[+-]\\d{4})?\\)\\/$/);
-  if (!match) return normalizeBrokerTimestamp(value);
-  const millis = Number(match[1]);
-  return Number.isFinite(millis) ? new Date(millis).toISOString() : "";
+  const trimmed = value.trim();
+  if (trimmed.startsWith("/Date(") && trimmed.endsWith(")/")) {
+    const inner = trimmed.slice(6, -2);
+    const millisText = inner.match(/^-?\d+/)?.[0];
+    const millis = millisText === undefined ? Number.NaN : Number(millisText);
+    return Number.isFinite(millis) ? new Date(millis).toISOString() : "";
+  }
+  return normalizeBrokerTimestamp(trimmed);
 }
 
 /** Normalize the documented 5Paisa Xstream V1 TradeBook response. */
@@ -211,7 +215,7 @@ export function normalizeFivePaisaTradeBook(payload: unknown): AdapterResult {
 
 function normalizeMStockTimestamp(value: unknown): string {
   if (typeof value !== "string" || !value.trim()) return "";
-  const match = value.trim().match(/^(\\d{2})-(\\d{2})-(\\d{4}) (\\d{2}):(\\d{2}):(\\d{2})$/);
+  const match = value.trim().match(/^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2}):(\d{2})$/);
   if (match) return normalizeBrokerTimestamp(`${match[3]}-${match[2]}-${match[1]}T${match[4]}:${match[5]}:${match[6]}`);
   return normalizeBrokerTimestamp(value);
 }
