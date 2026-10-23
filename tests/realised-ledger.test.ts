@@ -185,3 +185,46 @@ test("KV reader rejects valid-looking records stored under the wrong broker/date
     /partition identity mismatch/i,
   );
 });
+
+import { normalizeZerodhaTrades } from "../src/realised-ledger-adapters.ts";
+
+test("Zerodha adapter normalizes executed trades and rejects malformed rows without dropping valid fills", () => {
+  const result = normalizeZerodhaTrades({
+    status: "success",
+    data: [
+      {
+        trade_id: 12345,
+        order_id: 67890,
+        exchange: "NFO",
+        tradingsymbol: "NIFTY26OCT24000CE",
+        product: "NRML",
+        transaction_type: "SELL",
+        quantity: 65,
+        average_price: 102.5,
+        fill_timestamp: "2026-10-23 09:30:00",
+      },
+      {
+        trade_id: "BAD",
+        order_id: "BADORDER",
+        exchange: "NFO",
+        tradingsymbol: "NIFTY26OCT24000CE",
+        transaction_type: "BUY",
+        quantity: 0,
+        average_price: 20,
+        fill_timestamp: "2026-10-23 09:31:00",
+      },
+    ],
+  });
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].broker, "Zerodha");
+  assert.equal(result.records[0].broker_trade_id, "12345");
+  assert.equal(result.records[0].side, "SELL");
+  assert.equal(result.records[0].quantity, 65);
+  assert.equal(result.rejected.length, 1);
+});
+
+test("Zerodha adapter refuses payloads without a data array", () => {
+  const result = normalizeZerodhaTrades({ status: "success", data: null });
+  assert.equal(result.records.length, 0);
+  assert.equal(result.rejected.length, 1);
+});
