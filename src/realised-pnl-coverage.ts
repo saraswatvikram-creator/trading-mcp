@@ -86,7 +86,6 @@ export function evaluateBrokerCoverage(
     const grossBlockers = blockers.length > 0;
     const netBlockers = grossBlockers || !item.chargesAndTaxesVerified;
     if (!item.chargesAndTaxesVerified) blockers.push("Charges and taxes are not verified.");
-    if (item.evidenceNote) blockers.push("Evidence note: " + item.evidenceNote);
 
     return {
       broker,
