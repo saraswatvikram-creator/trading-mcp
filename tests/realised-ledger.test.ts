@@ -242,3 +242,36 @@ test("FIFO inventory key separates exchange and product for the same symbol", ()
   assert.equal(result.matches.length, 0);
   assert.equal(result.realised_gross_pnl, 0);
 });
+
+
+test("Zerodha adapter preserves explicit timestamp offsets instead of treating them as IST", () => {
+  const result = normalizeZerodhaTrades({
+    data: [{
+      trade_id: "OFFSET1",
+      order_id: "ORDER1",
+      exchange: "NFO",
+      tradingsymbol: "NIFTY26OCT24000CE",
+      product: "NRML",
+      transaction_type: "BUY",
+      quantity: 65,
+      price: 25,
+      fill_timestamp: "2026-10-23T09:30:00+05:30",
+    }],
+  });
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].executed_at, "2026-10-23T04:00:00.000Z");
+  assert.equal(result.rejected.length, 0);
+});
+
+test("FIFO rejects invalid opening inventory rather than calculating from corrupted lots", () => {
+  const trade = fill({ side: "BUY", broker_trade_id: "BUY1" });
+  const key = inventoryKey(trade);
+  assert.throws(
+    () => calculateFifoRealisedPnl([trade], { [key]: [{ signed_quantity: 0, price: 100 }] }, true),
+    /Invalid opening inventory lot/i,
+  );
+  assert.throws(
+    () => calculateFifoRealisedPnl([trade], { [key]: [{ signed_quantity: 10, price: Number.NaN }] }, true),
+    /Invalid opening inventory lot/i,
+  );
+});
