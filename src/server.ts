@@ -989,7 +989,7 @@ function createServer(
         const coverage = await getLedgerCoverage(env.PNL_DB as any);
         const rows = (coverage as any[]).map((row) =>
           `| ${row.broker} | ${row.executions} | ${row.first_execution ?? "—"} | ${row.last_execution ?? "—"} | ${row.rows_with_realised_pnl} |`
-        ).join("\\n");
+        ).join("\n");
         return { content: [{ type: "text", text: [
           "# P&L Ledger Status",
           "",
@@ -1138,7 +1138,7 @@ function createServer(
           fmtPeriod(currentPeriodMatches.week, broker) + " | " + fmtPeriod(currentPeriodMatches.month, broker) + " | " +
           (fyMatches.length ? current(fyMatches).toFixed(2) : (brokerHasData ? "0.00" : "—")) + " | " +
           (brokerMatches.length ? current(brokerMatches).toFixed(2) : "—") + " |";
-      }).join("\\n");
+      }).join("\n");
       const currentFyMatches = fifo.matches.filter((m) => inRange(m.closeTime, periodStart.fy));
       const consolidatedRow = "| **Consolidated realised gross P&L** | **" +
         fmtPeriod(currentPeriodMatches.today) + "** | **" + fmtPeriod(currentPeriodMatches.week) + "** | **" +
@@ -1177,7 +1177,7 @@ function createServer(
         return "| " + fy + "–" + String(fy + 1).slice(-2) + " | " +
           (matches.length ? gross.toFixed(2) : "—") + " | " +
           (charges === null ? "—" : charges.toFixed(2)) + " | — | — | — |";
-      }).join("\\n");
+      }).join("\n");
       const totalGross = fifo.matches.length ? (sumMatches(fifo.matches) / 100000).toFixed(2) : "—";
       const totalCosts = hasIncompleteCostData || !ledgerRows.length ? "—" :
         (ledgerRows.reduce((sum, row) => sum + Number(row.charges ?? 0) + Number(row.taxes ?? 0), 0) / 100000).toFixed(2);
@@ -1215,7 +1215,7 @@ function createServer(
         "",
         "**Report: Generated**",
         "",
-        "Data coverage: " + (ledgerQueryError ? "Ledger unavailable" : (ledgerRows.length ? "Execution-ledger data available; historical completeness depends on broker feed coverage" : "No execution rows available in ledger; historical snapshot retained where applicable")) + ".",
+        "Data coverage: " + (ledgerQueryError ? "Ledger unavailable" : (ledgerRows.length ? "Execution-ledger data available; historical completeness depends on broker feed coverage" : "No execution rows available in the live broker execution ledger")) + ".",
         "",
         "Update Auth ran automatically: " + authenticationStatus + ". Execution ingestion: " + ingestionStatus + ". Ledger: " + storageStatus + ".",
         "All figures are derived exclusively from live broker execution feeds and the durable execution ledger. No external historical baseline is used. Interest and income tax are shown only when directly supported by live broker data.",
