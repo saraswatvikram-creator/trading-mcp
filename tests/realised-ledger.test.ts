@@ -187,7 +187,7 @@ test("KV reader rejects valid-looking records stored under the wrong broker/date
   );
 });
 
-import { normalizeZerodhaTrades } from "../src/realised-ledger-adapters.ts";
+import { normalizeZerodhaTrades, normalizeAngelOneTradeBook, normalizeGrowwOrderTrades } from "../src/realised-ledger-adapters.ts";
 
 test("Zerodha adapter normalizes executed trades and rejects malformed rows without dropping valid fills", () => {
   const result = normalizeZerodhaTrades({
@@ -274,4 +274,74 @@ test("FIFO rejects invalid opening inventory rather than calculating from corrup
     () => calculateFifoRealisedPnl([trade], { [key]: [{ signed_quantity: 10, price: Number.NaN }] }, true),
     /Invalid opening inventory lot/i,
   );
+});
+
+
+test("Angel One adapter normalizes documented tradebook fields using an explicit India trade date", () => {
+  const result = normalizeAngelOneTradeBook({
+    status: true,
+    data: [{
+      exchange: "NFO",
+      producttype: "CARRYFORWARD",
+      tradingsymbol: "NIFTY26OCT24000CE",
+      transactiontype: "SELL",
+      fillprice: "102.50",
+      fillsize: "65",
+      orderid: "ORDER-A1",
+      fillid: "FILL-A1",
+      filltime: "13:27:53",
+    }],
+  }, "2026-10-23");
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].broker, "AngelOne");
+  assert.equal(result.records[0].broker_trade_id, "FILL-A1");
+  assert.equal(result.records[0].quantity, 65);
+  assert.equal(result.records[0].price, 102.5);
+  assert.equal(result.records[0].executed_at, "2026-10-23T07:57:53.000Z");
+});
+
+test("Angel One adapter refuses to infer the trade date", () => {
+  const result = normalizeAngelOneTradeBook({ data: [] }, "");
+  assert.equal(result.records.length, 0);
+  assert.match(result.rejected[0].errors[0], /trade date/i);
+});
+
+test("Groww adapter normalizes completed documented trade rows and rejects non-completed rows", () => {
+  const result = normalizeGrowwOrderTrades({
+    status: "SUCCESS",
+    payload: {
+      trade_list: [
+        {
+          price: 75.25,
+          quantity: 65,
+          groww_order_id: "ORDER-G1",
+          groww_trade_id: "TRADE-G1",
+          trade_status: "COMPLETED",
+          trading_symbol: "NIFTY26OCT24000CE",
+          exchange: "NFO",
+          segment: "FNO",
+          product: "NRML",
+          transaction_type: "BUY",
+          trade_date_time: "2026-10-23T10:15:00+05:30",
+        },
+        {
+          price: 75.25,
+          quantity: 65,
+          groww_order_id: "ORDER-G2",
+          groww_trade_id: "TRADE-G2",
+          trade_status: "PENDING",
+          trading_symbol: "NIFTY26OCT24000CE",
+          exchange: "NFO",
+          product: "NRML",
+          transaction_type: "BUY",
+          trade_date_time: "2026-10-23T10:16:00+05:30",
+        },
+      ],
+    },
+  });
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].broker, "Groww");
+  assert.equal(result.records[0].broker_trade_id, "TRADE-G1");
+  assert.equal(result.records[0].executed_at, "2026-10-23T04:45:00.000Z");
+  assert.equal(result.rejected.length, 1);
 });
