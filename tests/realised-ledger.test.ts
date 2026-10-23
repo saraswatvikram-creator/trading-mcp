@@ -220,6 +220,7 @@ test("Zerodha adapter normalizes executed trades and rejects malformed rows with
   assert.equal(result.records[0].broker_trade_id, "12345");
   assert.equal(result.records[0].side, "SELL");
   assert.equal(result.records[0].quantity, 65);
+  assert.equal(result.records[0].executed_at, "2026-10-23T04:00:00.000Z");
   assert.equal(result.rejected.length, 1);
 });
 
