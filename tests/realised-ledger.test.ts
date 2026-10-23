@@ -347,6 +347,17 @@ test("Groww adapter normalizes completed documented trade rows and rejects non-c
 });
 
 
+
+
+test("Groww adapter rejects unsuccessful responses even if a trade_list field is present", () => {
+  const result = normalizeGrowwOrderTrades({
+    status: "FAILURE",
+    payload: { trade_list: [] },
+  });
+  assert.equal(result.records.length, 0);
+  assert.match(result.rejected[0].errors[0], /successful trade response/i);
+});
+
 test("5Paisa adapter normalizes documented Xstream tradebook fields and epoch timestamp", () => {
   const result = normalizeFivePaisaTradeBook({
     body: {
