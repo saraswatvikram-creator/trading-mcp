@@ -169,3 +169,19 @@ test("KV read rejects invalid date syntax and invalid records in stored partitio
   kv.values.set(key, JSON.stringify([{ ...fill(), quantity: -1 }]));
   await assert.rejects(() => readExecutionPartition(kv, "Zerodha", "2026-10-23"), /invalid records/i);
 });
+
+
+test("KV reader rejects valid-looking records stored under the wrong broker/date partition", async () => {
+  class MemoryKV implements LedgerKV {
+    values = new Map<string, string>();
+    async get(key: string) { return this.values.get(key) ?? null; }
+    async put(key: string, value: string) { this.values.set(key, value); }
+  }
+  const kv = new MemoryKV();
+  const key = "realised-ledger:v1:partition:Zerodha:2026-10-23";
+  kv.values.set(key, JSON.stringify([fill({ broker: "Groww" })]));
+  await assert.rejects(
+    () => readExecutionPartition(kv, "Zerodha", "2026-10-23"),
+    /partition identity mismatch/i,
+  );
+});
