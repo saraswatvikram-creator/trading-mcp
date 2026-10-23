@@ -177,13 +177,20 @@ function normalizeFivePaisaDate(value: unknown): string {
 export function normalizeFivePaisaTradeBook(payload: unknown): AdapterResult {
   const root = payload && typeof payload === "object" ? payload as Record<string, unknown> : null;
   const body = root?.body && typeof root.body === "object" ? root.body as Record<string, unknown> : null;
-  if (!body || !Array.isArray(body.TradeBookDetail)) {
-    return { records: [], rejected: [{ index: -1, errors: ["5Paisa response must contain body.TradeBookDetail."] }] };
+  // The deployed MCP dashboard wraps the verified current-day Xstream response
+  // under `trades`; raw API responses use body.TradeBookDetail.
+  const dashboardRows = root?.status === "CONNECTED" && root?.read_only === true && Array.isArray(root?.trades)
+    ? root.trades
+    : null;
+  if (dashboardRows) {
+    // This wrapper already represents a successful authenticated dashboard response.
+  } else if (!body || !Array.isArray(body.TradeBookDetail)) {
+    return { records: [], rejected: [{ index: -1, errors: ["5Paisa response must contain body.TradeBookDetail or a successful read-only dashboard trades array."] }] };
   }
-  if (body.Status !== undefined && Number(body.Status) !== 0 && Number(body.Status) !== 1) {
+  if (body && body.Status !== undefined && Number(body.Status) !== 0 && Number(body.Status) !== 1) {
     return { records: [], rejected: [{ index: -1, errors: ["5Paisa tradebook reported an API/session error; response was not treated as an empty tradebook."] }] };
   }
-  const rows = body.TradeBookDetail;
+  const rows = dashboardRows ?? body!.TradeBookDetail as unknown[];
   const records: ExecutionRecord[] = [];
   const rejected: AdapterResult["rejected"] = [];
   rows.forEach((row, index) => {
