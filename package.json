@@ -7,7 +7,8 @@
     "start": "vite dev",
     "deploy": "vite build && wrangler deploy",
     "types": "wrangler types env.d.ts --include-runtime false",
-    "build": "vite build"
+    "build": "vite build",
+    "test": "node --experimental-strip-types --test tests/realised-ledger.test.ts"
   },
   "dependencies": {
     "@cloudflare/kumo": "^2.6.0",
