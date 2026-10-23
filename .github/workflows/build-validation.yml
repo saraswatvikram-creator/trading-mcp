@@ -24,3 +24,6 @@ jobs:
 
       - name: Build
         run: npm run deploy -- --dry-run
+
+      - name: Test realised P&L ledger
+        run: npm test
