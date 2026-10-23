@@ -757,19 +757,19 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
       for (const order of orders) {
         const orderId = String(order?.groww_order_id ?? order?.order_id ?? order?.id ?? "").trim();
         if (!orderId) {
-          if (String(order?.status ?? "").toUpperCase() === "EXECUTED") {
+          if (String(order?.order_status ?? order?.status ?? "").toUpperCase() === "EXECUTED") {
             tradeErrors.push({ order_id: null, error: "Executed order has no recognized Groww order ID" });
           }
           continue;
         }
-        const orderStatus = String(order?.status ?? "").toUpperCase();
+        const orderStatus = String(order?.order_status ?? order?.status ?? "").toUpperCase();
         if (orderStatus && !["EXECUTED", "PARTIALLY_EXECUTED", "PARTIALLY FILLED", "PARTIALLY_FILLED"].includes(orderStatus)) continue;
 
         let orderComplete = false;
         for (let page = 0; page < maxTradePages; page++) {
           try {
             const response = await growwGetWithAutoRefresh(
-              "/v1/order/trades/" + encodeURIComponent(orderId) + "?page=" + page + "&page_size=50",
+              "/v1/order/trades/" + encodeURIComponent(orderId) + "?segment=FNO&page=" + page + "&page_size=50",
               env
             );
             tokenExpiry = response.expiry ?? tokenExpiry;
