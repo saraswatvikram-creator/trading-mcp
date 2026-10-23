@@ -1133,10 +1133,9 @@ function createServer(
         const brokerMatches = fifo.matches.filter((m) => m.broker === broker);
         const fyMatches = brokerMatches.filter((m) => inRange(m.closeTime, periodStart.fy));
         const current = (matches: typeof fifo.matches) => matches.reduce((sum, m) => sum + m.grossPnl, 0) / 100000;
-        const brokerHasData = coverageSummary.some((row) => row.broker === broker && row.executions > 0);
         return "| " + broker + " | " + fmtPeriod(currentPeriodMatches.today, broker) + " | " +
           fmtPeriod(currentPeriodMatches.week, broker) + " | " + fmtPeriod(currentPeriodMatches.month, broker) + " | " +
-          (fyMatches.length ? current(fyMatches).toFixed(2) : (brokerHasData ? "0.00" : "—")) + " | " +
+          (fyMatches.length ? current(fyMatches).toFixed(2) : "—") + " | " +
           (brokerMatches.length ? current(brokerMatches).toFixed(2) : "—") + " |";
       }).join("\n");
       const currentFyMatches = fifo.matches.filter((m) => inRange(m.closeTime, periodStart.fy));
