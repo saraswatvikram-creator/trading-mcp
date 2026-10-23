@@ -444,3 +444,53 @@ test("FIFO permits same timestamp across different instruments", () => {
   const result = calculateFifoRealisedPnl([first, second], {}, true);
   assert.equal(result.matches.length, 0);
 });
+
+import { evaluateBrokerCoverage, canPublishConsolidated, type BrokerCoverageEvidence } from "../src/realised-pnl-coverage.ts";
+
+test("coverage gate blocks incomplete periods and only publishes verified net P&L", () => {
+  const brokers: BrokerCoverageEvidence[] = (["Zerodha", "AngelOne", "Groww", "5Paisa", "m.Stock"] as const).map((broker) => ({
+    broker,
+    coveredFrom: "2026-04-01",
+    coveredThrough: "2026-10-23",
+    sourceVerified: true,
+    openingInventoryVerified: true,
+    reconciliationComplete: true,
+    unmatchedExecutionCount: 0,
+    conflictCount: 0,
+    chargesAndTaxesVerified: true,
+  }));
+  const allReady = evaluateBrokerCoverage({ startDate: "2026-04-01", endDate: "2026-10-23" }, brokers);
+  assert.equal(canPublishConsolidated(allReady, "gross"), true);
+  assert.equal(canPublishConsolidated(allReady, "net"), true);
+
+  const partial = brokers.map((b) => ({ ...b }));
+  partial[2].coveredFrom = "2026-10-01";
+  const blocked = evaluateBrokerCoverage({ startDate: "2026-04-01", endDate: "2026-10-23" }, partial);
+  assert.equal(blocked.find((d) => d.broker === "Groww")?.publishGross, false);
+  assert.equal(canPublishConsolidated(blocked, "gross"), false);
+});
+
+test("coverage gate keeps gross and net publication separate when charges are unverified", () => {
+  const evidence: BrokerCoverageEvidence[] = (["Zerodha", "AngelOne", "Groww", "5Paisa", "m.Stock"] as const).map((broker) => ({
+    broker, coveredFrom: "2026-04-01", coveredThrough: "2026-10-23",
+    sourceVerified: true, openingInventoryVerified: true, reconciliationComplete: true,
+    unmatchedExecutionCount: 0, conflictCount: 0, chargesAndTaxesVerified: broker !== "Groww",
+  }));
+  const decisions = evaluateBrokerCoverage({ startDate: "2026-04-01", endDate: "2026-10-23" }, evidence);
+  const groww = decisions.find((d) => d.broker === "Groww");
+  assert.equal(groww?.publishGross, true);
+  assert.equal(groww?.publishNet, false);
+  assert.equal(canPublishConsolidated(decisions, "gross"), true);
+  assert.equal(canPublishConsolidated(decisions, "net"), false);
+});
+
+test("coverage gate fails closed for missing broker evidence and invalid windows", () => {
+  const decisions = evaluateBrokerCoverage({ startDate: "2026-04-01", endDate: "2026-10-23" }, []);
+  assert.equal(decisions.length, 5);
+  assert.ok(decisions.every((d) => !d.publishGross && !d.publishNet));
+  assert.equal(canPublishConsolidated(decisions.slice(0, 4), "gross"), false);
+  assert.throws(
+    () => evaluateBrokerCoverage({ startDate: "2026-10-24", endDate: "2026-10-23" }, []),
+    /valid YYYY-MM-DD/i,
+  );
+});
