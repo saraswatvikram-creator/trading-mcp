@@ -175,7 +175,16 @@ export function calculateFifoRealisedPnl(
   }
   const matches: RealisedMatch[] = [];
   const unmatched: Record<string, number> = {};
+  // If fills for the same broker/instrument have the same timestamp, ordering
+  // is not reliably reconstructable from timestamps alone. Refuse to guess FIFO.
   const ordered = [...executions].sort((a, b) => Date.parse(a.executed_at) - Date.parse(b.executed_at));
+  for (let i = 1; i < ordered.length; i++) {
+    const previous = ordered[i - 1];
+    const current = ordered[i];
+    if (previous.executed_at === current.executed_at && inventoryKey(previous) === inventoryKey(current)) {
+      throw new Error(`Ambiguous FIFO order: multiple executions for "${inventoryKey(current)}" share timestamp ${current.executed_at}.`);
+    }
+  }
 
   for (const trade of ordered) {
     const key = inventoryKey(trade);
