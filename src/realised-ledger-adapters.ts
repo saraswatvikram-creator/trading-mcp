@@ -4,6 +4,16 @@ import {
   type ValidationResult,
 } from "./realised-ledger.ts";
 
+function normalizeBrokerTimestamp(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) return "";
+  const trimmed = value.trim();
+  // Broker tradebook timestamps are India-local when no UTC offset is supplied.
+  // Attach the explicit IST offset so runtime timezone cannot change interpretation.
+  const hasZone = /(?:Z|[+-]\\d{2}:?\\d{2})$/i.test(trimmed);
+  const normalized = hasZone ? trimmed : trimmed.replace(" ", "T") + "+05:30";
+  return Number.isFinite(Date.parse(normalized)) ? new Date(normalized).toISOString() : "";
+}
+
 export interface AdapterResult {
   records: ExecutionRecord[];
   rejected: Array<{ index: number; errors: string[] }>;
@@ -50,7 +60,7 @@ export function normalizeZerodhaTrades(payload: unknown): AdapterResult {
       side,
       quantity: typeof quantity === "number" ? quantity : Number.NaN,
       price: typeof price === "number" ? price : Number.NaN,
-      executed_at: typeof timestamp === "string" ? timestamp : "",
+      executed_at: normalizeBrokerTimestamp(timestamp),
       source: "zerodha_kite_trades",
     };
     const checked: ValidationResult = validateExecution(candidate);
