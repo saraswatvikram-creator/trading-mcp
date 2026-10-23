@@ -63,15 +63,18 @@ export function evaluateBrokerCoverage(
       return { broker, publishGross: false, publishNet: false, blockers };
     }
 
-    if (!item.sourceVerified) blockers.push("Broker source/response schema is not verified.");
+    for (const field of ["sourceVerified", "openingInventoryVerified", "reconciliationComplete", "chargesAndTaxesVerified"] as const) {
+      if (typeof item[field] !== "boolean") blockers.push(field + " must be a boolean evidence flag.");
+    }
+    if (item.sourceVerified !== true) blockers.push("Broker source/response schema is not verified.");
     if (!validDate(item.coveredFrom) || !validDate(item.coveredThrough)) {
       blockers.push("Coverage dates are missing or invalid.");
     } else {
       if (item.coveredFrom > period.startDate) blockers.push("Coverage starts after the requested period begins.");
       if (item.coveredThrough < period.endDate) blockers.push("Coverage ends before the requested period ends.");
     }
-    if (!item.openingInventoryVerified) blockers.push("Opening inventory is not verified.");
-    if (!item.reconciliationComplete) blockers.push("Execution/position reconciliation is incomplete.");
+    if (item.openingInventoryVerified !== true) blockers.push("Opening inventory is not verified.");
+    if (item.reconciliationComplete !== true) blockers.push("Execution/position reconciliation is incomplete.");
     if (!Number.isInteger(item.unmatchedExecutionCount) || item.unmatchedExecutionCount < 0) {
       blockers.push("Unmatched execution count is invalid.");
     } else if (item.unmatchedExecutionCount > 0) {
@@ -84,8 +87,8 @@ export function evaluateBrokerCoverage(
     }
 
     const grossBlockers = blockers.length > 0;
-    const netBlockers = grossBlockers || !item.chargesAndTaxesVerified;
-    if (!item.chargesAndTaxesVerified) blockers.push("Charges and taxes are not verified.");
+    const netBlockers = grossBlockers || item.chargesAndTaxesVerified !== true;
+    if (item.chargesAndTaxesVerified !== true) blockers.push("Charges and taxes are not verified.");
 
     return {
       broker,
@@ -103,6 +106,8 @@ export function canPublishConsolidated(
 ): boolean {
   if (decisions.length !== BROKERS.length) return false;
   const expected = new Set(BROKERS);
-  if (decisions.some((d) => !expected.has(d.broker)) || expected.size !== decisions.length) return false;
-  return decisions.every((d) => basis === "gross" ? d.publishGross : d.publishNet);
+  const actual = new Set(decisions.map((d) => d.broker));
+  if (decisions.some((d) => !expected.has(d.broker)) || actual.size !== BROKERS.length) return false;
+  if (BROKERS.some((broker) => !actual.has(broker))) return false;
+  return decisions.every((d) => basis === "gross" ? d.publishGross === true : d.publishNet === true);
 }
