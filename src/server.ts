@@ -7,7 +7,7 @@ import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 import { runUpdateAuth, handleAuthRoute } from "./auth";
 import { getLedgerCoverage, persistExecutions, calculateFifoRealisedPnl, type PnlExecution, type PnlBroker, type LedgerExecutionRow } from "./pnl-ledger";
-import { PNL_SNAPSHOT_AS_OF, PNL_YEARLY_BASELINE, PNL_BROKER_BASELINE } from "./pnl-baseline";
+// P&L reports use only live broker feeds and the durable execution ledger.
 
 type Env = {
   ZERODHA_API_KEY: string;
@@ -1013,7 +1013,7 @@ function createServer(
   server.registerTool(
     "update_pnl",
     {
-      description: "Refresh both Historical P&L tables from one durable execution ledger. Does not read, preserve, or require a manually entered historical baseline. Automatically runs Update Auth and attempts each broker independently. Explicitly flags incomplete broker tradebook coverage; never treats open-position MTM as realised P&L. Read-only broker APIs; only ledger/audit metadata is written.",
+      description: "Refresh both P&L tables exclusively from live data returned by Zerodha, AngelOne, Groww, 5Paisa and m.Stock and the durable execution ledger. Does not use Google Sheets or manually entered historical baselines. Automatically runs Update Auth and attempts each broker independently. Open-position MTM is excluded. Read-only broker APIs; only ledger/audit metadata is written.",
     },
     async () => {
       const now = new Date();
@@ -1131,35 +1131,35 @@ function createServer(
         week: fifo.matches.filter((m) => inRange(m.closeTime, periodStart.week)),
         month: fifo.matches.filter((m) => inRange(m.closeTime, periodStart.month)),
       };
+      const coverageSummary = brokers.map((broker) => {
+        const row = coverageRows.find((item) => item.broker === broker);
+        return { broker, executions: Number(row?.executions ?? 0), first: row?.first_execution ?? null, last: row?.last_execution ?? null };
+      });
       const brokerRows = brokers.map((broker) => {
-        const fyBase = baselineCurrentFyForBroker(broker);
-        const allBase = baselineGrossForBroker(broker);
-        const known = Object.prototype.hasOwnProperty.call(PNL_BROKER_BASELINE, broker);
+        const brokerMatches = fifo.matches.filter((m) => m.broker === broker);
+        const fyMatches = brokerMatches.filter((m) => inRange(m.closeTime, periodStart.fy));
+        const current = (matches: typeof fifo.matches) => matches.reduce((sum, m) => sum + m.grossPnl, 0) / 100000;
+        const brokerHasData = coverageSummary.some((row) => row.broker === broker && row.executions > 0);
         return "| " + broker + " | " + fmtPeriod(currentPeriodMatches.today, broker) + " | " +
           fmtPeriod(currentPeriodMatches.week, broker) + " | " + fmtPeriod(currentPeriodMatches.month, broker) + " | " +
-          (known ? (fyBase + sumAfterSnapshot(afterSnapshotFyMatches, broker) / 100000).toFixed(2) : "—") + " | " +
-          (known ? (allBase + sumAfterSnapshot(afterSnapshotMatches, broker) / 100000).toFixed(2) : "—") + " |";
-      }).join("\n");
-      const baselineTotalAll = PNL_YEARLY_BASELINE.reduce((sum, r) => sum + r.gross, 0);
+          (fyMatches.length ? current(fyMatches).toFixed(2) : (brokerHasData ? "0.00" : "—")) + " | " +
+          (brokerMatches.length ? current(brokerMatches).toFixed(2) : "—") + " |";
+      }).join("\\n");
+      const currentFyMatches = fifo.matches.filter((m) => inRange(m.closeTime, periodStart.fy));
       const consolidatedRow = "| **Consolidated realised gross P&L** | **" +
         fmtPeriod(currentPeriodMatches.today) + "** | **" + fmtPeriod(currentPeriodMatches.week) + "** | **" +
         fmtPeriod(currentPeriodMatches.month) + "** | **" +
-        (baselineFyRow ? (baselineFyRow.gross + sumAfterSnapshot(afterSnapshotFyMatches) / 100000).toFixed(2) : "—") + "** | **" +
-        (baselineTotalAll + sumAfterSnapshot(afterSnapshotMatches) / 100000).toFixed(2) + "** |";
+        (currentFyMatches.length ? (sumMatches(currentFyMatches) / 100000).toFixed(2) : "—") + "** | **" +
+        (fifo.matches.length ? (sumMatches(fifo.matches) / 100000).toFixed(2) : "—") + "** |";
 
       const availableTimes = ledgerRows.map((r) => r.trade_time).filter((v) => typeof v === "string").sort();
       const firstAvailable = availableTimes[0] ?? null;
       const lastAvailable = availableTimes[availableTimes.length - 1] ?? null;
       const hasIncompleteCostData = ledgerRows.some((r) => r.charges === null || r.charges === undefined || r.taxes === null || r.taxes === undefined);
-      const coverageSummary = brokers.map((broker) => {
-        const c = coverageRows.find((row) => row.broker === broker);
-        return { broker, executions: Number(c?.executions ?? 0), first: c?.first_execution ?? null, last: c?.last_execution ?? null };
-      });
-      if (ledgerRows.length === 0) issues.push("The execution ledger contains no transactions; realised P&L cannot be computed from an empty ledger.");
-      if (hasIncompleteCostData) issues.push("Brokerage and taxes are missing on one or more execution records; net P&L cannot be asserted from the current ledger.");
-      if (coverageSummary.some((c) => c.executions === 0)) issues.push("One or more brokers have no stored executions; consolidated all-time history is not complete.");
-      issues.push("Historical coverage is limited to records actually returned by broker APIs and stored in the ledger. The Google Sheets snapshot baseline is used as of " + PNL_SNAPSHOT_AS_OF + ".");
-      issues.push("Interest is not exposed by the execution feeds used here; net P&L and income tax remain unconfirmed until source-backed values are available.");
+      if (ledgerRows.length === 0) issues.push("No executions are currently available in the live execution ledger; realised P&L cannot be calculated.");
+      if (hasIncompleteCostData) issues.push("Some live execution records do not contain charges and/or taxes.");
+      if (coverageSummary.some((row) => row.executions === 0)) issues.push("No execution records were returned or stored for one or more brokers.");
+      issues.push("Figures are derived only from executions available through the five broker feeds and the durable ledger. Historical activity absent from those feeds is not inferred.");
       const allHistoryYears = new Set<number>();
       for (const row of ledgerRows) {
         const d = new Date(row.trade_time);
@@ -1169,29 +1169,33 @@ function createServer(
           allHistoryYears.add(indiaMonth >= 4 ? indiaYear : indiaYear - 1);
         }
       }
-      const currentYearForFy = fyStartYear;
-      allHistoryYears.add(currentYearForFy);
+      allHistoryYears.add(fyStartYear);
       const years = [...allHistoryYears].sort((a, b) => a - b);
-      const yearlyRows = PNL_YEARLY_BASELINE.map((base) => {
-        const start = isoAtIndiaMidnight(base.fy + "-04-01");
-        const end = isoAtIndiaMidnight((base.fy + 1) + "-04-01");
-        const added = fifo.matches.filter((m) => m.closeTime >= isoAtIndiaMidnight(PNL_SNAPSHOT_AS_OF) && inRange(m.closeTime, start, end)).reduce((sum, m) => sum + m.grossPnl, 0) / 100000;
-        return "| " + base.fy + "–" + String(base.fy + 1).slice(-2) + " | " + (base.gross + added).toFixed(2) + " | " + base.chargesTaxes.toFixed(2) + " | " + base.interest.toFixed(2) + " | " + base.incomeTax.toFixed(2) + " | " + (base.net + added).toFixed(2) + " |";
-      }).join("\n");
-      const totalGross = (PNL_YEARLY_BASELINE.reduce((sum, r) => sum + r.gross, 0) + fifo.matches.filter((m) => m.closeTime >= isoAtIndiaMidnight(PNL_SNAPSHOT_AS_OF)).reduce((sum, m) => sum + m.grossPnl, 0) / 100000).toFixed(2);
-
-      const costRowsComplete = ledgerRows.length > 0 && ledgerRows.every((r) => r.charges !== null && r.charges !== undefined && r.taxes !== null && r.taxes !== undefined);
-      const totalCosts = PNL_YEARLY_BASELINE.reduce((sum, r) => sum + r.chargesTaxes, 0).toFixed(2);
+      const yearlyRows = years.map((fy) => {
+        const start = isoAtIndiaMidnight(fy + "-04-01");
+        const end = isoAtIndiaMidnight((fy + 1) + "-04-01");
+        const matches = fifo.matches.filter((m) => inRange(m.closeTime, start, end));
+        const gross = matches.reduce((sum, m) => sum + m.grossPnl, 0) / 100000;
+        const executions = ledgerRows.filter((row) => inRange(row.trade_time, start, end));
+        const charges = executions.length && executions.every((row) => row.charges !== null && row.charges !== undefined && row.taxes !== null && row.taxes !== undefined)
+          ? executions.reduce((sum, row) => sum + Number(row.charges ?? 0) + Number(row.taxes ?? 0), 0) / 100000
+          : null;
+        return "| " + fy + "–" + String(fy + 1).slice(-2) + " | " +
+          (matches.length ? gross.toFixed(2) : "—") + " | " +
+          (charges === null ? "—" : charges.toFixed(2)) + " | — | — | — |";
+      }).join("\\n");
+      const totalGross = fifo.matches.length ? (sumMatches(fifo.matches) / 100000).toFixed(2) : "—";
+      const totalCosts = hasIncompleteCostData || !ledgerRows.length ? "—" :
+        (ledgerRows.reduce((sum, row) => sum + Number(row.charges ?? 0) + Number(row.taxes ?? 0), 0) / 100000).toFixed(2);
       const audit = {
         report_date: dateKey,
         generated_at: nowDate.toISOString(),
-        status: ledgerQueryError ? "LEDGER_READ_FAILED" : (ledgerRows.length && ingestionStatus === "SUCCESS" && !hasIncompleteCostData ? "LEDGER_CALCULATED_COSTS_PARTIAL" : "SOURCE_COVERAGE_LIMITED"),
+        status: ledgerQueryError ? "LEDGER_READ_FAILED" : (ledgerRows.length ? "LIVE_LEDGER_DATA_AVAILABLE" : "LIVE_LEDGER_EMPTY"),
         authentication_status: authenticationStatus,
         authentication_brokers: authenticationBrokers,
         execution_ingestion_status: ingestionStatus,
         execution_ingestion_brokers: ingestionBrokers,
         storage_status: storageStatus,
-        baseline_status: "USER_SHEET_SNAPSHOT_AS_OF_" + PNL_SNAPSHOT_AS_OF,
         ledger_execution_count: ledgerRows.length,
         ledger_first_execution: firstAvailable,
         ledger_last_execution: lastAvailable,
@@ -1220,8 +1224,8 @@ function createServer(
         "Data coverage: " + (ledgerQueryError ? "Ledger unavailable" : (ledgerRows.length ? "Execution-ledger data available; historical completeness depends on broker feed coverage" : "No execution rows available in ledger; historical snapshot retained where applicable")) + ".",
         "",
         "Update Auth ran automatically: " + authenticationStatus + ". Execution ingestion: " + ingestionStatus + ". Ledger: " + storageStatus + ".",
-        "Daily/weekly/monthly figures are calculated from the durable execution ledger. FY/all-time and yearly figures start from the user-provided Google Sheets snapshot dated " + PNL_SNAPSHOT_AS_OF + " and add FIFO gross realised P&L for ledger matches after that cutoff. Historical charges, interest and tax remain snapshot values until source-verified.",
-        "Table 1 is reconstructed realised **gross** P&L using FIFO matching for executions currently stored. Open positions/MTM are excluded. “All Time in Ledger” is not a claim of full account history: pre-ledger trades absent from broker API responses cannot be reconstructed. A dash means source data is unavailable, not zero.",
+        "All figures are derived exclusively from live broker execution feeds and the durable execution ledger. No external historical baseline is used. Interest and income tax are shown only when directly supported by live broker data.",
+        "Table 1 shows realised gross P&L reconstructed with FIFO from executions currently stored. Open-position MTM is excluded. “All Time in Ledger” covers only records currently available from the five broker feeds and stored in the ledger; unavailable history is not inferred. A dash means the value is unavailable or cannot be calculated, not zero.",
         "",
         "## Table 1 — P&L Summary (₹ lakh)",
         "",
@@ -1235,14 +1239,14 @@ function createServer(
         "| FY | Gross realised P&L (FIFO) | Charges & Taxes | Interest | Income Tax | Net P&L |",
         "|---|---:|---:|---:|---:|---:|",
         yearlyRows || "| — | — | — | — | — | — |",
-        "| **TOTAL** | **" + totalGross + "** | **" + totalCosts + "** | **-17.83** | **-4.50** | **" + PNL_YEARLY_BASELINE.reduce((sum, r) => sum + r.net, 0).toFixed(2) + "** |",
+        "| **TOTAL** | **" + totalGross + "** | **" + totalCosts + "** | **—** | **—** | **—** |",
         "",
         "Ledger coverage: " + (firstAvailable ?? "—") + " to " + (lastAvailable ?? "—") + ".",
         "Cost and tax treatment is shown only when source fields are populated; interest is not inferred. This prevents fabricated net P&L or tax figures.",
         "",
         "## Validation",
         "- Open-position MTM excluded.",
-        "- Google Sheets snapshot baseline dated "+ PNL_SNAPSHOT_AS_OF + " is used for historical periods.",
+        "- No Google Sheets or manually entered historical baseline is used.",
         "- Duplicate-safe execution ingestion remains enabled.",
         "- Data notes: " + (issues.length ? issues.join(" ") : "No additional data notes.")
       ].join("\n");
