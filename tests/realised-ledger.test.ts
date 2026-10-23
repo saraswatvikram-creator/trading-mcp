@@ -87,3 +87,22 @@ test("FIFO does not net identical instruments across different brokers", () => {
   assert.equal(result.realised_gross_pnl, 0);
   assert.equal(result.matches.length, 0);
 });
+
+test("FIFO handles partial closes and leaves the residual short quantity open", () => {
+  const sell = fill({ broker_trade_id: "SELL1", side: "SELL", quantity: 100, price: 100 });
+  const buy = fill({ broker_trade_id: "BUY1", side: "BUY", quantity: 40, price: 60, executed_at: "2026-10-23T10:00:00.000Z" });
+  const result = calculateFifoRealisedPnl([sell, buy], {}, true);
+  assert.equal(result.realised_gross_pnl, 1600);
+  assert.equal(result.matches.length, 1);
+  assert.equal(result.ending_inventory["Zerodha|NIFTY26OCT24000CE"][0].signed_quantity, -60);
+});
+
+test("FIFO handles a position reversal after closing the existing long lot", () => {
+  const openLong = fill({ broker_trade_id: "BUY1", side: "BUY", quantity: 30, price: 80 });
+  const sellThroughZero = fill({ broker_trade_id: "SELL1", side: "SELL", quantity: 50, price: 100, executed_at: "2026-10-23T10:00:00.000Z" });
+  const buyBack = fill({ broker_trade_id: "BUY2", side: "BUY", quantity: 20, price: 90, executed_at: "2026-10-23T11:00:00.000Z" });
+  const result = calculateFifoRealisedPnl([openLong, sellThroughZero, buyBack], {}, true);
+  assert.equal(result.realised_gross_pnl, 500);
+  assert.equal(result.matches.length, 2);
+  assert.equal(result.ending_inventory["Zerodha|NIFTY26OCT24000CE"].length, 0);
+});
