@@ -385,6 +385,27 @@ test("5Paisa adapter normalizes documented Xstream tradebook fields and epoch ti
   assert.equal(result.records[0].executed_at, "2024-02-08T04:00:50.000Z");
 });
 
+test("5Paisa adapter accepts the deployed authenticated dashboard trades wrapper", () => {
+  const result = normalizeFivePaisaTradeBook({
+    status: "CONNECTED",
+    read_only: true,
+    trades: [{
+      Exch: "N", ExchType: "D", ScripCode: 54102, ScripName: "NIFTY26N0323800CE",
+      BuySell: "B", Qty: 65, PendingQty: 0, OrgQty: 1755, Rate: 9.65,
+      ExchOrderID: "1000000129456426", ExchangeTradeID: "4022938",
+      ExchangeTradeTime: "/Date(1792755397000+0530)/", TradeType: "ON",
+      DelvIntra: "D", Multiplier: 1,
+    }],
+  });
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].broker, "5Paisa");
+  assert.equal(result.records[0].broker_trade_id, "4022938");
+  assert.equal(result.records[0].exchange, "NFO");
+  assert.equal(result.records[0].side, "BUY");
+  assert.equal(result.records[0].price, 9.65);
+  assert.equal(result.rejected.length, 0);
+});
+
 test("5Paisa adapter does not mistake invalid sessions for an empty tradebook", () => {
   const result = normalizeFivePaisaTradeBook({ body: { Status: 9, Message: "Invalid Session", TradeBookDetail: [] } });
   assert.equal(result.records.length, 0);
