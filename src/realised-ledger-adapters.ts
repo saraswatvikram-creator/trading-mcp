@@ -156,3 +156,100 @@ export function normalizeGrowwOrderTrades(payload: unknown): AdapterResult {
   });
   return { records, rejected };
 }
+
+
+function normalizeFivePaisaDate(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const match = value.match(/^\\/Date\\((-?\\d+)(?:[+-]\\d{4})?\\)\\/$/);
+  if (!match) return normalizeBrokerTimestamp(value);
+  const millis = Number(match[1]);
+  return Number.isFinite(millis) ? new Date(millis).toISOString() : "";
+}
+
+/** Normalize the documented 5Paisa Xstream V1 TradeBook response. */
+export function normalizeFivePaisaTradeBook(payload: unknown): AdapterResult {
+  const root = payload && typeof payload === "object" ? payload as Record<string, unknown> : null;
+  const body = root?.body && typeof root.body === "object" ? root.body as Record<string, unknown> : null;
+  if (!body || !Array.isArray(body.TradeBookDetail)) {
+    return { records: [], rejected: [{ index: -1, errors: ["5Paisa response must contain body.TradeBookDetail."] }] };
+  }
+  if (body.Status !== undefined && Number(body.Status) !== 0 && Number(body.Status) !== 1) {
+    return { records: [], rejected: [{ index: -1, errors: ["5Paisa tradebook reported an API/session error; response was not treated as an empty tradebook."] }] };
+  }
+  const rows = body.TradeBookDetail;
+  const records: ExecutionRecord[] = [];
+  const rejected: AdapterResult["rejected"] = [];
+  rows.forEach((row, index) => {
+    if (!row || typeof row !== "object") {
+      rejected.push({ index, errors: ["Trade row must be an object."] });
+      return;
+    }
+    const raw = row as Record<string, unknown>;
+    const ex = String(raw.Exch ?? "").toUpperCase();
+    const exType = String(raw.ExchType ?? "").toUpperCase();
+    const exchange = exType === "D" ? (ex === "B" ? "BFO" : ex === "N" ? "NFO" : "") : ex === "B" ? "BSE" : ex === "N" ? "NSE" : ex === "M" ? "MCX" : "";
+    const candidate = {
+      schema_version: 1,
+      broker: "5Paisa",
+      broker_trade_id: typeof raw.ExchangeTradeID === "string" || typeof raw.ExchangeTradeID === "number" ? String(raw.ExchangeTradeID) : "",
+      broker_order_id: typeof raw.ExchOrderID === "string" || typeof raw.ExchOrderID === "number" ? String(raw.ExchOrderID) : null,
+      exchange: exchange || null,
+      instrument: typeof raw.ScripName === "string" ? raw.ScripName : "",
+      product: typeof raw.DelvIntra === "string" ? raw.DelvIntra : null,
+      side: raw.BuySell === "B" ? "BUY" : raw.BuySell === "S" ? "SELL" : "",
+      quantity: typeof raw.Qty === "number" ? raw.Qty : Number(raw.Qty),
+      price: typeof raw.Rate === "number" ? raw.Rate : Number(raw.Rate),
+      executed_at: normalizeFivePaisaDate(raw.ExchangeTradeTime),
+      source: "fivepaisa_xstream_tradebook",
+    };
+    const checked = validateExecution(candidate);
+    if (!checked.valid || !checked.record) rejected.push({ index, errors: checked.errors });
+    else records.push(checked.record);
+  });
+  return { records, rejected };
+}
+
+function normalizeMStockTimestamp(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) return "";
+  const match = value.trim().match(/^(\\d{2})-(\\d{2})-(\\d{4}) (\\d{2}):(\\d{2}):(\\d{2})$/);
+  if (match) return normalizeBrokerTimestamp(`${match[3]}-${match[2]}-${match[1]}T${match[4]}:${match[5]}:${match[6]}`);
+  return normalizeBrokerTimestamp(value);
+}
+
+/** Normalize the documented m.Stock Type A tradebook response. */
+export function normalizeMStockTradeBook(payload: unknown): AdapterResult {
+  const root = payload && typeof payload === "object" ? payload as Record<string, unknown> : null;
+  const rows = Array.isArray(root?.data) ? root.data : null;
+  if (!rows) return { records: [], rejected: [{ index: -1, errors: ["m.Stock tradebook response must contain a data array."] }] };
+  if (String(root?.status ?? "").toLowerCase() !== "success") {
+    return { records: [], rejected: [{ index: -1, errors: ["m.Stock did not report a successful tradebook response."] }] };
+  }
+  const records: ExecutionRecord[] = [];
+  const rejected: AdapterResult["rejected"] = [];
+  rows.forEach((row, index) => {
+    if (!row || typeof row !== "object") {
+      rejected.push({ index, errors: ["Trade row must be an object."] });
+      return;
+    }
+    const raw = row as Record<string, unknown>;
+    const candidate = {
+      schema_version: 1,
+      broker: "m.Stock",
+      broker_trade_id: typeof raw.TRADE_NUMBER === "string" || typeof raw.TRADE_NUMBER === "number" ? String(raw.TRADE_NUMBER) : "",
+      broker_order_id: typeof raw.EXCH_ORDER_NUMBER === "string" || typeof raw.EXCH_ORDER_NUMBER === "number" ? String(raw.EXCH_ORDER_NUMBER) : null,
+      exchange: typeof raw.EXCHANGE === "string" ? raw.EXCHANGE : null,
+      instrument: typeof raw.SYMBOL === "string" ? raw.SYMBOL : typeof raw.FULL_SYMBOL === "string" ? raw.FULL_SYMBOL : "",
+      product: typeof raw.PRODUCT === "string" ? raw.PRODUCT : null,
+      side: typeof raw.BUY_SELL === "string" && raw.BUY_SELL.toUpperCase() === "BUY" ? "BUY" :
+        typeof raw.BUY_SELL === "string" && raw.BUY_SELL.toUpperCase() === "SELL" ? "SELL" : "",
+      quantity: typeof raw.QUANTITY === "number" ? raw.QUANTITY : Number(raw.QUANTITY),
+      price: typeof raw.PRICE === "number" ? raw.PRICE : Number(raw.PRICE),
+      executed_at: normalizeMStockTimestamp(raw.ORDER_DATE_TIME),
+      source: "mstock_typea_tradebook",
+    };
+    const checked = validateExecution(candidate);
+    if (!checked.valid || !checked.record) rejected.push({ index, errors: checked.errors });
+    else records.push(checked.record);
+  });
+  return { records, rejected };
+}
