@@ -187,7 +187,7 @@ test("KV reader rejects valid-looking records stored under the wrong broker/date
   );
 });
 
-import { normalizeZerodhaTrades, normalizeAngelOneTradeBook, normalizeGrowwOrderTrades } from "../src/realised-ledger-adapters.ts";
+import { normalizeZerodhaTrades, normalizeAngelOneTradeBook, normalizeGrowwOrderTrades, normalizeFivePaisaTradeBook, normalizeMStockTradeBook } from "../src/realised-ledger-adapters.ts";
 
 test("Zerodha adapter normalizes executed trades and rejects malformed rows without dropping valid fills", () => {
   const result = normalizeZerodhaTrades({
@@ -344,4 +344,67 @@ test("Groww adapter normalizes completed documented trade rows and rejects non-c
   assert.equal(result.records[0].broker_trade_id, "TRADE-G1");
   assert.equal(result.records[0].executed_at, "2026-10-23T04:45:00.000Z");
   assert.equal(result.rejected.length, 1);
+});
+
+
+test("5Paisa adapter normalizes documented Xstream tradebook fields and epoch timestamp", () => {
+  const result = normalizeFivePaisaTradeBook({
+    body: {
+      Status: 0,
+      TradeBookDetail: [{
+        BuySell: "S",
+        DelvIntra: "I",
+        Exch: "N",
+        ExchType: "D",
+        ExchOrderID: "EXORDER-5P",
+        ExchangeTradeID: "EXTRADE-5P",
+        ExchangeTradeTime: "/Date(1707364850000+0530)/",
+        Qty: 50,
+        Rate: 2.55,
+        ScripName: "NIFTY 08 Feb 2024 CE 22300.00",
+      }],
+    },
+  });
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].broker, "5Paisa");
+  assert.equal(result.records[0].broker_trade_id, "EXTRADE-5P");
+  assert.equal(result.records[0].exchange, "NFO");
+  assert.equal(result.records[0].side, "SELL");
+  assert.equal(result.records[0].quantity, 50);
+  assert.equal(result.records[0].executed_at, "2024-02-08T08:00:50.000Z");
+});
+
+test("5Paisa adapter does not mistake invalid sessions for an empty tradebook", () => {
+  const result = normalizeFivePaisaTradeBook({ body: { Status: 9, Message: "Invalid Session", TradeBookDetail: [] } });
+  assert.equal(result.records.length, 0);
+  assert.match(result.rejected[0].errors[0], /session error/i);
+});
+
+test("m.Stock adapter normalizes documented Type A tradebook fields", () => {
+  const result = normalizeMStockTradeBook({
+    status: "success",
+    data: [{
+      BUY_SELL: "Sell",
+      EXCHANGE: "NFO",
+      EXCH_ORDER_NUMBER: "ORDER-MS1",
+      ORDER_DATE_TIME: "23-10-2026 13:08:42",
+      PRICE: 6.98,
+      PRODUCT: "NRML",
+      QUANTITY: 65,
+      SYMBOL: "NIFTY26OCT24000CE",
+      TRADE_NUMBER: "TRADE-MS1",
+    }],
+  });
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].broker, "m.Stock");
+  assert.equal(result.records[0].broker_trade_id, "TRADE-MS1");
+  assert.equal(result.records[0].side, "SELL");
+  assert.equal(result.records[0].exchange, "NFO");
+  assert.equal(result.records[0].executed_at, "2026-10-23T07:38:42.000Z");
+});
+
+test("m.Stock adapter rejects unsuccessful payloads instead of returning an empty ledger", () => {
+  const result = normalizeMStockTradeBook({ status: "error", data: null });
+  assert.equal(result.records.length, 0);
+  assert.match(result.rejected[0].errors[0], /successful tradebook/i);
 });
