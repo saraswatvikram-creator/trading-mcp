@@ -1215,7 +1215,9 @@ function createServer(
       const report = [
         "# Update P/L — " + dateKey,
         "",
-        "**Status: " + audit.status + "**",
+        "**Report: Generated**",
+        "",
+        "Data coverage: " + (ledgerQueryError ? "Ledger unavailable" : (ledgerRows.length ? "Execution-ledger data available; historical completeness depends on broker feed coverage" : "No execution rows available in ledger; historical snapshot retained where applicable")) + ".",
         "",
         "Update Auth ran automatically: " + authenticationStatus + ". Execution ingestion: " + ingestionStatus + ". Ledger: " + storageStatus + ".",
         "Daily/weekly/monthly figures are calculated from the durable execution ledger. FY/all-time and yearly figures start from the user-provided Google Sheets snapshot dated " + PNL_SNAPSHOT_AS_OF + " and add FIFO gross realised P&L for ledger matches after that cutoff. Historical charges, interest and tax remain snapshot values until source-verified.",
@@ -1242,7 +1244,7 @@ function createServer(
         "- Open-position MTM excluded.",
         "- Google Sheets snapshot baseline dated "+ PNL_SNAPSHOT_AS_OF + " is used for historical periods.",
         "- Duplicate-safe execution ingestion remains enabled.",
-        "- Issues: " + issues.join(" "),
+        "- Data notes: " + (issues.length ? issues.join(" ") : "No additional data notes.")
       ].join("\n");
       return { content: [{ type: "text", text: report }] };
     }
