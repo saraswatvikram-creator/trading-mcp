@@ -119,6 +119,9 @@ export function normalizeAngelOneTradeBook(payload: unknown, indiaTradeDate: str
 /** Normalize documented Groww Get Trades for Order response rows. */
 export function normalizeGrowwOrderTrades(payload: unknown): AdapterResult {
   const root = payload && typeof payload === "object" ? payload as Record<string, unknown> : null;
+  if (String(root?.status ?? "").toUpperCase() !== "SUCCESS") {
+    return { records: [], rejected: [{ index: -1, errors: ["Groww did not report a successful trade response; payload was not treated as an empty trade list."] }] };
+  }
   const body = root?.payload && typeof root.payload === "object" ? root.payload as Record<string, unknown> : null;
   const rows = Array.isArray(body?.trade_list) ? body.trade_list : null;
   if (!rows) return { records: [], rejected: [{ index: -1, errors: ["Groww trade response must contain payload.trade_list."] }] };
