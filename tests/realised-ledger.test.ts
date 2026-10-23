@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { persistExecutions, readExecutionPartition, type LedgerKV } from "../src/realised-ledger-store.ts";
 import assert from "node:assert/strict";
 import {
   calculateFifoRealisedPnl,
@@ -105,4 +106,37 @@ test("FIFO handles a position reversal after closing the existing long lot", () 
   assert.equal(result.realised_gross_pnl, 800);
   assert.equal(result.matches.length, 2);
   assert.equal(result.ending_inventory["Zerodha|NIFTY26OCT24000CE"].length, 0);
+});
+
+test("KV execution persistence is idempotent and partitions by broker and India trading date", async () => {
+  class MemoryKV implements LedgerKV {
+    values = new Map<string, string>();
+    async get(key: string) { return this.values.get(key) ?? null; }
+    async put(key: string, value: string) { this.values.set(key, value); }
+  }
+  const kv = new MemoryKV();
+  const a = fill({ executed_at: "2026-10-23T20:00:00.000Z" });
+  const first = await persistExecutions(kv, [a]);
+  assert.equal(first[0].accepted, 1);
+  const second = await persistExecutions(kv, [a]);
+  assert.equal(second[0].accepted, 0);
+  assert.equal(second[0].duplicate_count, 1);
+  assert.equal((await readExecutionPartition(kv, "Zerodha", "2026-10-24")).length, 1);
+  assert.equal((await readExecutionPartition(kv, "Groww", "2026-10-24")).length, 0);
+});
+
+test("KV execution persistence refuses conflicting duplicate identity without overwriting", async () => {
+  class MemoryKV implements LedgerKV {
+    values = new Map<string, string>();
+    async get(key: string) { return this.values.get(key) ?? null; }
+    async put(key: string, value: string) { this.values.set(key, value); }
+  }
+  const kv = new MemoryKV();
+  const a = fill();
+  await persistExecutions(kv, [a]);
+  const key = [...kv.values.keys()][0];
+  const before = kv.values.get(key);
+  const conflict = await persistExecutions(kv, [fill({ price: 999 })]);
+  assert.ok(conflict[0].conflicts.length > 0);
+  assert.equal(kv.values.get(key), before);
 });
