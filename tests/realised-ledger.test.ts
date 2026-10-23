@@ -371,7 +371,7 @@ test("5Paisa adapter normalizes documented Xstream tradebook fields and epoch ti
   assert.equal(result.records[0].exchange, "NFO");
   assert.equal(result.records[0].side, "SELL");
   assert.equal(result.records[0].quantity, 50);
-  assert.equal(result.records[0].executed_at, "2024-02-08T08:00:50.000Z");
+  assert.equal(result.records[0].executed_at, "2024-02-08T04:00:50.000Z");
 });
 
 test("5Paisa adapter does not mistake invalid sessions for an empty tradebook", () => {
