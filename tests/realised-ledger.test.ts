@@ -5,6 +5,7 @@ import {
   calculateFifoRealisedPnl,
   deduplicateExecutions,
   executionKey,
+  inventoryKey,
   validateExecution,
   type ExecutionRecord,
 } from "../src/realised-ledger.ts";
@@ -95,7 +96,7 @@ test("FIFO handles partial closes and leaves the residual short quantity open", 
   const result = calculateFifoRealisedPnl([sell, buy], {}, true);
   assert.equal(result.realised_gross_pnl, 1600);
   assert.equal(result.matches.length, 1);
-  assert.equal(result.ending_inventory["Zerodha|NIFTY26OCT24000CE"][0].signed_quantity, -60);
+  assert.equal(result.ending_inventory["Zerodha|NFO|NRML|NIFTY26OCT24000CE"][0].signed_quantity, -60);
 });
 
 test("FIFO handles a position reversal after closing the existing long lot", () => {
@@ -105,7 +106,7 @@ test("FIFO handles a position reversal after closing the existing long lot", () 
   const result = calculateFifoRealisedPnl([openLong, sellThroughZero, buyBack], {}, true);
   assert.equal(result.realised_gross_pnl, 800);
   assert.equal(result.matches.length, 2);
-  assert.equal(result.ending_inventory["Zerodha|NIFTY26OCT24000CE"].length, 0);
+  assert.equal(result.ending_inventory["Zerodha|NFO|NRML|NIFTY26OCT24000CE"].length, 0);
 });
 
 test("KV execution persistence is idempotent and partitions by broker and India trading date", async () => {
@@ -228,4 +229,16 @@ test("Zerodha adapter refuses payloads without a data array", () => {
   const result = normalizeZerodhaTrades({ status: "success", data: null });
   assert.equal(result.records.length, 0);
   assert.equal(result.rejected.length, 1);
+});
+
+
+test("FIFO inventory key separates exchange and product for the same symbol", () => {
+  const base = fill();
+  assert.notEqual(inventoryKey(base), inventoryKey({ ...base, product: "MIS" }));
+  assert.notEqual(inventoryKey(base), inventoryKey({ ...base, exchange: "BSE" }));
+  const first = fill({ side: "SELL", price: 100, product: "NRML" });
+  const otherProduct = fill({ side: "BUY", price: 40, product: "MIS", executed_at: "2026-10-23T10:00:00.000Z" });
+  const result = calculateFifoRealisedPnl([first, otherProduct], {}, true);
+  assert.equal(result.matches.length, 0);
+  assert.equal(result.realised_gross_pnl, 0);
 });
