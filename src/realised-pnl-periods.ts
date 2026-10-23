@@ -1,5 +1,5 @@
 export interface ReportPeriod {
-  label: "Today" | "This Week" | "This Month" | "FY 2026–27";
+  label: string;
   startDate: string;
   endDate: string;
 }
@@ -43,6 +43,6 @@ export function resolveRealisedPnlPeriods(now = new Date()): ReportPeriod[] {
     { label: "Today", startDate: today, endDate: today },
     { label: "This Week", startDate: weekStart, endDate: today },
     { label: "This Month", startDate: monthStart, endDate: today },
-    { label: "FY 2026–27", startDate: fyStart, endDate: today },
+    { label: "FY " + fyStartYear + "–" + String(fyStartYear + 1).slice(-2), startDate: fyStart, endDate: today },
   ];
 }
