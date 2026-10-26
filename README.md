@@ -112,7 +112,7 @@ After broker authentication, the user can run:
 1. **Update Trades**
 2. **Update Investments**
 
-Historical P&L is maintained manually in Google Sheets. The `update_pnl` MCP tool has been removed.
+Historical P&L is maintained manually in Google Sheets.
 
 **Update Trades margin integration:** every Update Trades run must call the `update_trades_margin` tool and render its `formatted_section` as **Section 4 — Available Margin for Options**. Keep the five broker rows and combined total sourced from that live response; if any broker API fails or returns a non-numeric value, show that broker as unavailable and withhold the combined total. Move **New Trades — Today** to Section 5. This tool uses the same five margin API helpers as Update Investments and is read-only.
 
