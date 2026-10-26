@@ -673,7 +673,7 @@ function createServer(
             : "### Trading Desk NOT READY — no broker authenticated",
         "",
         payload.status === "READY" || payload.status === "PARTIAL_READY"
-          ? "Run **Update Trades**, **Update P/L** and **Update Investments**. Each report should include every broker whose authentication/API call succeeds and identify unavailable brokers individually; one broker failure must not block the others."
+          ? "Run **Update Trades** and **Update Investments**. Each report should include every broker whose authentication/API call succeeds and identify unavailable brokers individually; one broker failure must not block the others."
           : "No broker is currently authenticated, so broker data cannot be refreshed. Complete at least one broker authentication and run **Update Auth** again.",
         "",
         "### Automation note",
@@ -688,62 +688,6 @@ function createServer(
     }
   );
 
-
-  // ==========================================================
-  // UPDATE P/L — LIVE BROKER DATA ONLY
-  // ==========================================================
-  server.registerTool(
-    "update_pnl",
-    {
-      description: "Return a live-only P&L report for Zerodha, AngelOne, Groww, 5Paisa and m.Stock. Never reads or reports historical spreadsheet snapshots or manually entered baselines. Missing live realised-P&L data is shown as unavailable, not zero. Open-position MTM is excluded. Read-only.",
-    },
-    async () => {
-      const now = new Date();
-      const dateKey = new Intl.DateTimeFormat("en-CA", {
-        timeZone: "Asia/Kolkata",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-      }).format(now);
-      let authStatus = "UNAVAILABLE";
-      let authentication: any[] = [];
-      try {
-        const auth: any = await runUpdateAuth(env, baseUrl);
-        authStatus = String(auth?.status ?? "UNKNOWN");
-        authentication = Array.isArray(auth?.authentication) ? auth.authentication : [];
-      } catch (error) {
-        authStatus = "FAILED";
-      }
-      const brokers = ["Zerodha", "AngelOne", "Groww", "5Paisa", "m.Stock"];
-      const brokerRows = brokers.map((broker) =>
-        "| " + broker + " | — | — | — | — | — |"
-      ).join("\n");
-      const report = [
-        "# Update P/L — " + dateKey,
-        "",
-        "**Report: Generated**",
-        "",
-        "Update Auth: " + authStatus + ".",
-        "This report contains no historical spreadsheet snapshot, manually entered baseline, or inferred historical figures.",
-        "The currently deployed broker tools do not expose a verified, complete closed-trade realised-P&L feed across all five brokers. Therefore, realised P&L is shown as unavailable until live transaction-level records can be verified. A dash means unavailable, not zero.",
-        "",
-        "## Table 1 — Live Realised P&L (₹ lakh)",
-        "",
-        "| Broker | Today | This Week | This Month | FY 2026–27 | All Time (live records) |",
-        "|---|---:|---:|---:|---:|---:|",
-        brokerRows,
-        "| **Consolidated live realised P&L** | **—** | **—** | **—** | **—** | **—** |",
-        "",
-        "## Data validation",
-        "- Source scope: live broker information only; no Google Sheets snapshot or historical baseline.",
-        "- Open-position MTM excluded.",
-        "- No unverified charges, taxes, interest, or net P&L are inferred.",
-        "- Authentication details: " + (authentication.length ? authentication.map((item: any) => String(item?.broker ?? "Broker") + "=" + String(item?.status ?? "UNKNOWN")).join(", ") : "not returned by Update Auth") + ".",
-        "- Historical periods remain unavailable until the deployed broker integrations supply verified transaction-level records.",
-      ].join("\n");
-      return { content: [{ type: "text", text: report }] };
-    }
-  );
 
   // ==========================================================
   // CONSOLIDATED INVESTMENTS
