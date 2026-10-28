@@ -318,4 +318,31 @@ export function registerAngelOneTools(server: any, env: AngelOneEnv): void {
       };
     }
   );
+
+  server.registerTool(
+    "angelone_activity",
+    {
+      description: "Return today's Angel One order book and executed trade book using one authenticated SmartAPI session. Includes order statuses, fills, quantities, prices and timestamps. Read-only.",
+    },
+    async () => {
+      try {
+        const login = await angelOneLogin(env);
+        const [orders, trades] = await Promise.all([
+          angelOneGet("https://apiconnect.angelbroking.in/rest/secure/angelbroking/order/v1/getOrderBook", env, login.jwtToken),
+          angelOneGet("https://apiconnect.angelbroking.in/rest/secure/angelbroking/order/v1/getTradeBook", env, login.jwtToken),
+        ]);
+        return { content: [{ type: "text", text: JSON.stringify({
+          status: "LIVE", authenticated: true, broker: "Angel One",
+          orders: Array.isArray(orders?.data) ? orders.data : [],
+          trades: Array.isArray(trades?.data) ? trades.data : [],
+          order_count: Array.isArray(orders?.data) ? orders.data.length : 0,
+          trade_fill_count: Array.isArray(trades?.data) ? trades.data.length : 0,
+          as_of: new Date().toISOString(), read_only: true
+        }, null, 2) }] };
+      } catch (error) {
+        return { content: [{ type: "text", text: JSON.stringify({ status: "ERROR", broker: "Angel One", error: error instanceof Error ? error.message : String(error), read_only: true }, null, 2) }] };
+      }
+    }
+  );
+
 }

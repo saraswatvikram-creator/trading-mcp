@@ -647,6 +647,38 @@ export function registerMStockTools(server: any, env: MStockEnv): void {
       });
     }
   );
+
+  server.registerTool(
+    "mstock_activity",
+    {
+      description: "Return today's m.Stock Type A order book and executed trade book using one authenticated session. Includes order statuses, fills, quantities, prices and timestamps. Read-only; automatically authenticates if needed.",
+    },
+    async () => {
+      try {
+        const r = await liveOrTotp(env);
+        if (!r.live) return result(r.auth);
+        const { apiKey } = config(env);
+        const token = await storedToken(env);
+        if (!token) throw new Error("MSTOCK_AUTH_REQUIRED: No m.Stock access token is stored.");
+        const [ordersResponse, tradesResponse] = await Promise.all([
+          get("/openapi/typea/orders", apiKey, token),
+          get("/openapi/typea/tradebook", apiKey, token)
+        ]);
+        const orders = Array.isArray(ordersResponse?.data) ? ordersResponse.data : [];
+        const trades = Array.isArray(tradesResponse?.data) ? tradesResponse.data : [];
+        return result({
+          status: "LIVE", broker: "m.Stock", orders, trades,
+          order_count: orders.length, trade_fill_count: trades.length,
+          as_of: new Date().toISOString(),
+          sources: ["m.Stock Type A /openapi/typea/orders", "m.Stock Type A /openapi/typea/tradebook"],
+          read_only: true
+        });
+      } catch (error) {
+        return result({ status: "ERROR", broker: "m.Stock", error: error instanceof Error ? error.message : String(error), read_only: true });
+      }
+    }
+  );
+
 }
 
 // Deployment refresh: ensure latest Cloudflare m.Stock secrets are active in production.

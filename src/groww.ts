@@ -713,6 +713,60 @@ export function registerGrowwTools(server: any, env: GrowwEnv): void {
     }
   );
 
+
+  server.registerTool(
+    "groww_trades_today",
+    {
+      description: "Return today's Groww F&O orders and all available execution fills by retrieving the F&O order list and every page of trades for each filled order. Read-only.",
+    },
+    async () => {
+      try {
+        const orderResult = await growwGetWithAutoRefresh("/v1/order/list?segment=FNO&page=0&page_size=100", env);
+        const firstPayload = orderResult.data?.payload ?? orderResult.data;
+        const firstPage = Array.isArray(firstPayload?.order_list) ? firstPayload.order_list : [];
+        const orders = [...firstPage];
+        if (firstPage.length === 100) {
+          for (let page = 1; page < 10; page++) {
+            const pageResult = await growwGetWithAutoRefresh("/v1/order/list?segment=FNO&page=" + page + "&page_size=100", env);
+            const pagePayload = pageResult.data?.payload ?? pageResult.data;
+            const rows = Array.isArray(pagePayload?.order_list) ? pagePayload.order_list : [];
+            orders.push(...rows);
+            if (rows.length < 100) break;
+          }
+        }
+        const trades: any[] = [];
+        const errors: any[] = [];
+        for (const order of orders) {
+          const orderId = order?.groww_order_id;
+          if (!orderId || Number(order?.filled_quantity ?? 0) <= 0) continue;
+          try {
+            for (let page = 0; page < 10; page++) {
+              const tradeResult = await growwGetWithAutoRefresh(
+                "/v1/order/trades/" + encodeURIComponent(String(orderId)) + "?segment=FNO&page=" + page + "&page_size=50",
+                env
+              );
+              const tradePayload = tradeResult.data?.payload ?? tradeResult.data;
+              const rows = Array.isArray(tradePayload?.trade_list) ? tradePayload.trade_list : [];
+              trades.push(...rows);
+              if (rows.length < 50) break;
+            }
+          } catch (error) {
+            errors.push({ groww_order_id: orderId, error: error instanceof Error ? error.message : String(error) });
+          }
+        }
+        return { content: [{ type: "text", text: JSON.stringify({
+          status: errors.length ? "PARTIAL" : "LIVE", broker: "Groww", segment: "FNO",
+          orders, trades, order_count: orders.length,
+          filled_order_count: orders.filter(o => Number(o?.filled_quantity ?? 0) > 0).length,
+          trade_fill_count: trades.length, trade_fetch_errors: errors,
+          token_expiry: orderResult.expiry, as_of: new Date().toISOString(), read_only: true
+        }, null, 2) }] };
+      } catch (error) {
+        return { content: [{ type: "text", text: JSON.stringify({ status: "ERROR", broker: "Groww", error: error instanceof Error ? error.message : String(error), read_only: true }, null, 2) }] };
+      }
+    }
+  );
+
   server.registerTool(
     "groww_dashboard",
     {
