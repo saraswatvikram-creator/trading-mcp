@@ -896,7 +896,7 @@ function createServer(
   server.registerTool(
     "update_trades_margin",
     {
-      description: "Fetch the live available-for-options margin section for the Update Trades dashboard from the same five broker margin APIs used by Update Investments. Call on every Update Trades run. Returns broker rows, a combined total only when all five numeric responses are live, and a ready-to-render Section 4. Read-only; never places, modifies, cancels or squares off orders.",
+      description: "Fetch the live available-for-options margin section for the Update Trades dashboard from the same five broker margin APIs used by Update Investments. Call on every Update Trades run. Returns broker rows, a combined total only when all five numeric responses are live, and a ready-to-render Section 4 — Available Margin for Options. The Update Trades report retains only: (1) Trade Summary, (2) Portfolio Totals, (3) Open Spread Details, (4) Available Margin for Options, and (5) Execution Status. Do not add Closed Positions — Today or New Trades — Today sections. Read-only; never places, modifies, cancels or squares off orders.",
     },
     async () => {
       const names = ["Zerodha", "Angel One", "Groww", "5Paisa", "m.Stock"];
