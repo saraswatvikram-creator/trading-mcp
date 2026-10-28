@@ -328,8 +328,8 @@ export function registerAngelOneTools(server: any, env: AngelOneEnv): void {
       try {
         const login = await angelOneLogin(env);
         const [orders, trades] = await Promise.all([
-          angelOneGet("https://apiconnect.angelbroking.in/rest/secure/angelbroking/order/v1/getOrderBook", env, login.jwtToken),
-          angelOneGet("https://apiconnect.angelbroking.in/rest/secure/angelbroking/order/v1/getTradeBook", env, login.jwtToken),
+          angelOneGet("https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/getOrderBook", env, login.jwtToken),
+          angelOneGet("https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/getTradeBook", env, login.jwtToken),
         ]);
         return { content: [{ type: "text", text: JSON.stringify({
           status: "LIVE", authenticated: true, broker: "Angel One",
