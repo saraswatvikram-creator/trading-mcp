@@ -482,7 +482,10 @@ async function getNfoInstrumentMaster(
 
 async function getZerodhaInvestmentHoldings(env: Env): Promise<any> {
   const response = await zerodhaGet("/portfolio/holdings", env) as any;
-  const rows = Array.isArray(response?.data) ? response.data : [];
+  if (!Array.isArray(response?.data)) {
+    throw new Error("Zerodha equity/ETF holdings response did not contain a valid data array.");
+  }
+  const rows = response.data;
   const equity = rows.map((r: any) => {
     // Kite reports settled and T+1 quantities separately. Include both when
     // valuing the holding, otherwise ETFs in T+1 settlement can appear as zero.
