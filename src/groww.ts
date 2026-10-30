@@ -423,7 +423,10 @@ export async function getGrowwHoldings(env: GrowwEnv): Promise<any> {
   const result = await growwGetWithAutoRefresh("/v1/holdings/user", env);
   const token = result;
   const response = result.data;
-  const holdings = response?.payload?.holdings ?? response?.payload ?? [];
+  const holdings = response?.payload?.holdings ?? response?.payload;
+  if (!Array.isArray(holdings)) {
+    throw new Error("Groww holdings response did not contain a valid holdings array.");
+  }
   const symbols = holdings
     .map((row: any) => "NSE_" + String(row?.trading_symbol ?? ""))
     .filter((symbol: string) => symbol !== "NSE_");
