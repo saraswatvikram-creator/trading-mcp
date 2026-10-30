@@ -1046,7 +1046,7 @@ function createServer(
       const sumInvestmentField = (field: "investment_value" | "current_value" | "pnl") =>
         investmentBrokers.reduce((sum, b) => sum + (typeof b[field] === "number" ? b[field] as number : 0), 0);
       const liveInvestmentCount = investmentBrokers.filter((b) => b.status === "LIVE").length;
-      const investmentTotal = {
+      const investmentTotal: any = {
         investment_value: sumInvestmentField("investment_value"),
         current_value: sumInvestmentField("current_value"),
         pnl: sumInvestmentField("pnl"),
