@@ -522,7 +522,10 @@ async function getZerodhaInvestmentHoldings(env: Env): Promise<any> {
   });
 
   const mfResponse = await zerodhaGet("/mf/holdings", env) as any;
-  const mfRows = Array.isArray(mfResponse?.data) ? mfResponse.data : [];
+  if (!Array.isArray(mfResponse?.data)) {
+    throw new Error("Zerodha mutual-fund holdings response did not contain a valid data array.");
+  }
+  const mfRows = mfResponse.data;
   const mutualFunds = mfRows.map((r: any) => {
     const quantity = Number(r?.quantity ?? 0);
     const average = r?.average_price === null || r?.average_price === undefined || r?.average_price === "" ? Number.NaN : Number(r.average_price);
