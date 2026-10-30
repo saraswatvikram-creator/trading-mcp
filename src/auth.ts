@@ -205,7 +205,7 @@ export async function runUpdateAuth(env: AuthEnv, baseUrl: string): Promise<any>
     available_brokers: brokers.filter((b) => b.status === "VALID").map((b) => b.broker),
     unavailable_brokers: brokers.filter((b) => b.status !== "VALID").map((b) => b.broker),
     next_commands: anyValid
-      ? ["update trades", "update P/L"]
+      ? ["update trades"]
       : [],
     read_only: true,
   };
