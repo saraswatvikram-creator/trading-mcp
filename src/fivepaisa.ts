@@ -526,7 +526,10 @@ export async function getFivePaisaHoldings(env: FivePaisaEnv, baseUrl: string): 
   }
 
   const response = await fivePaisaPost(env, "/V3/Holding", {});
-  const rows = Array.isArray(response?.body?.Data) ? response.body.Data : [];
+  if (!Array.isArray(response?.body?.Data)) {
+    throw new Error("5Paisa holdings response did not contain a valid Data array.");
+  }
+  const rows = response.body.Data;
   const normalized = rows.map((row: any) => {
     const quantity = Number(row?.Quantity ?? 0);
     const average = row?.AvgRate === null || row?.AvgRate === undefined || row?.AvgRate === "" ? Number.NaN : Number(row.AvgRate);
