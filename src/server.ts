@@ -1018,17 +1018,21 @@ function createServer(
         const validPnl = typeof pnl === "number" && Number.isFinite(pnl)
           ? pnl : (validInvested !== null && validCurrent !== null ? validCurrent - validInvested : null);
         const live = holdingResult?.authenticated === true || holdingResult?.status === "LIVE";
-        const holdingRows = Array.isArray(holdingResult?.holdings) ? holdingResult.holdings : [];
-        const everyHoldingValued = holdingRows.every((holding: any) =>
+        const holdingsArrayValid = Array.isArray(holdingResult?.holdings);
+        const holdingRows = holdingsArrayValid ? holdingResult.holdings : [];
+        // An explicit empty array is a valid zero-holdings response; a missing or
+        // malformed holdings field is not. Never advance the baseline on malformed data.
+        const everyHoldingValued = holdingsArrayValid && holdingRows.every((holding: any) =>
           typeof holding?.investment_value === "number" && Number.isFinite(holding.investment_value) &&
           typeof holding?.current_value === "number" && Number.isFinite(holding.current_value)
         );
-        const complete = live && validInvested !== null && validCurrent !== null && everyHoldingValued;
+        const complete = live && holdingsArrayValid && validInvested !== null && validCurrent !== null && everyHoldingValued;
         const hasPrevious = Object.prototype.hasOwnProperty.call(previousInvestment, investmentNames[i]);
         return {
           broker: investmentNames[i], status: complete ? "LIVE" : "PARTIAL",
           error: complete ? null : (holdingResult?.auth?.reason ?? holdingResult?.error ??
-            (!everyHoldingValued ? "One or more holdings are missing a valid investment cost or current market value." :
+            (!holdingsArrayValid ? "Holdings response was missing a valid holdings array." :
+              !everyHoldingValued ? "One or more holdings are missing a valid investment cost or current market value." :
               "Holdings response did not contain valid invested and current values.")),
           investment_value: validInvested, current_value: validCurrent, pnl: validPnl,
           pnl_percent: typeof summary.pnl_percent === "number" && Number.isFinite(summary.pnl_percent)
@@ -1110,7 +1114,7 @@ function createServer(
         content: [{
           type: "text",
           text: JSON.stringify({
-            status: complete ? "LIVE" : "PARTIAL",
+            status: complete && allInvestmentsLive ? "LIVE" : "PARTIAL",
             dashboard: "Update Trades — Available Margin for Options",
             margin_summary: {
               status: complete ? "LIVE" : "PARTIAL",
