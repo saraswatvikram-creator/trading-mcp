@@ -896,7 +896,7 @@ function createServer(
   server.registerTool(
     "update_trades_margin",
     {
-      description: "Fetch the live available-for-options margin section for the Update Trades dashboard from the same five broker margin APIs used by Update Investments. Call on every Update Trades run. Returns broker rows, a combined total only when all five numeric responses are live, and a ready-to-render Section 4 — Available Margin for Options. The Update Trades report retains only: (1) Trade Summary, (2) Portfolio Totals, (3) Open Spread Details, (4) Available Margin for Options, and (5) Execution Status. Do not add Closed Positions — Today or New Trades — Today sections. Read-only; never places, modifies, cancels or squares off orders.",
+      description: "Fetch Section 4 — Available Margin for Options and Sections 6–8 — Investment Portfolio Summary, Broker-wise Investment Status, and New Investment Tracking — for the consolidated Update Trades dashboard. Uses the five existing broker holdings adapters, includes Zerodha Coin mutual funds, and updates the same server-side investment baseline as Update Investments. Broker failures are isolated. Call on every Update Trades run. Read-only; never places, modifies, cancels or squares off orders.",
     },
     async () => {
       const names = ["Zerodha", "Angel One", "Groww", "5Paisa", "m.Stock"];
@@ -973,6 +973,124 @@ function createServer(
         "These values are broker-reported balances, not a recommendation to trade. Verify the balances before deploying new spreads."
       ].join("\n");
 
+
+      // Sections 6–8: investment holdings, reusing the existing broker adapters.
+      // Broker failures are isolated; no order-related API is called.
+      const investmentResults = await Promise.allSettled([
+        getZerodhaInvestmentHoldings(env),
+        getAngelOneHoldings(env, true),
+        getGrowwHoldings(env),
+        getFivePaisaHoldings(env, baseUrl),
+        getMStockHoldings(env),
+      ]);
+      const investmentNames = ["Zerodha", "Angel One", "Groww", "5Paisa", "m.Stock"];
+      const snapshotKey = "investments:last-investment-values:v2";
+      const previousInvestment: Record<string, number> = {};
+      let baselineAvailable = false;
+      let baselineError: string | null = null;
+      if (!env.ZERODHA_TOKEN_STORE) {
+        baselineError = "Investment baseline storage is unavailable.";
+      } else {
+        try {
+          const stored = await env.ZERODHA_TOKEN_STORE.get(snapshotKey, "json");
+          if (stored && typeof stored === "object") {
+            Object.assign(previousInvestment, stored);
+            baselineAvailable = Object.keys(previousInvestment).length > 0;
+          }
+        } catch (error) {
+          baselineError = error instanceof Error ? error.message : String(error);
+        }
+      }
+
+      const investmentBrokers = investmentResults.map((result, i) => {
+        if (result.status !== "fulfilled") {
+          return {
+            broker: investmentNames[i], status: "ERROR",
+            error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+            investment_value: null, current_value: null, pnl: null, pnl_percent: null, net_change: null,
+          };
+        }
+        const summary: any = (result.value as any)?.summary ?? {};
+        const invested = summary.investment_value;
+        const current = summary.current_value;
+        const pnl = summary.pnl;
+        const validInvested = typeof invested === "number" && Number.isFinite(invested) ? invested : null;
+        const validCurrent = typeof current === "number" && Number.isFinite(current) ? current : null;
+        const validPnl = typeof pnl === "number" && Number.isFinite(pnl)
+          ? pnl : (validInvested !== null && validCurrent !== null ? validCurrent - validInvested : null);
+        const hasPrevious = Object.prototype.hasOwnProperty.call(previousInvestment, investmentNames[i]);
+        return {
+          broker: investmentNames[i], status: "LIVE", error: null,
+          investment_value: validInvested, current_value: validCurrent, pnl: validPnl,
+          pnl_percent: typeof summary.pnl_percent === "number" && Number.isFinite(summary.pnl_percent)
+            ? summary.pnl_percent : (validPnl !== null && validInvested ? validPnl / validInvested * 100 : null),
+          net_change: baselineAvailable && hasPrevious && validInvested !== null
+            ? validInvested - previousInvestment[investmentNames[i]] : null,
+        };
+      });
+
+      const allInvestmentsLive = investmentBrokers.length === investmentNames.length &&
+        investmentBrokers.every((b) => b.status === "LIVE" && b.investment_value !== null && b.current_value !== null);
+      let investmentBaselineStatus = "UNAVAILABLE";
+      if (env.ZERODHA_TOKEN_STORE && allInvestmentsLive) {
+        const nextSnapshot: Record<string, number> = {};
+        for (const broker of investmentBrokers) nextSnapshot[broker.broker] = Number(broker.investment_value);
+        try {
+          await env.ZERODHA_TOKEN_STORE.put(snapshotKey, JSON.stringify(nextSnapshot));
+          investmentBaselineStatus = baselineAvailable ? "UPDATED" : "ESTABLISHED";
+        } catch (error) {
+          baselineError = error instanceof Error ? error.message : String(error);
+        }
+      }
+
+      const sumInvestmentField = (field: "investment_value" | "current_value" | "pnl") =>
+        investmentBrokers.reduce((sum, b) => sum + (typeof b[field] === "number" ? b[field] as number : 0), 0);
+      const liveInvestmentCount = investmentBrokers.filter((b) => b.status === "LIVE").length;
+      const investmentTotal = {
+        investment_value: sumInvestmentField("investment_value"),
+        current_value: sumInvestmentField("current_value"),
+        pnl: sumInvestmentField("pnl"),
+      };
+      investmentTotal.pnl_percent = investmentTotal.investment_value
+        ? investmentTotal.pnl / investmentTotal.investment_value * 100 : null;
+      const netChangeKnown = allInvestmentsLive && investmentBrokers.every((b) => b.net_change !== null);
+      const totalNetChange = netChangeKnown
+        ? investmentBrokers.reduce((sum, b) => sum + Number(b.net_change), 0) : null;
+      const investmentInr = (value: number | null | undefined) =>
+        value === null || value === undefined || !Number.isFinite(Number(value))
+          ? "UNAVAILABLE"
+          : (Number(value) < 0 ? "−₹" + Math.abs(Number(value)).toLocaleString("en-IN", { maximumFractionDigits: 2 })
+            : "₹" + Number(value).toLocaleString("en-IN", { maximumFractionDigits: 2 }));
+      const investmentPct = (value: number | null | undefined) =>
+        value === null || value === undefined || !Number.isFinite(Number(value))
+          ? "UNAVAILABLE" : Number(value).toFixed(2) + "%";
+
+      const investmentSections = [
+        "## Section 6 — Investment Portfolio Summary",
+        "",
+        "| Invested Value | Current Value | Unrealised P&L | Return | Data Status |",
+        "|---:|---:|---:|---:|---|",
+        "| " + investmentInr(investmentTotal.investment_value) + " | " + investmentInr(investmentTotal.current_value) + " | " + investmentInr(investmentTotal.pnl) + " | " + investmentPct(investmentTotal.pnl_percent) + " | " + (allInvestmentsLive ? "LIVE — 5/5 brokers" : "PARTIAL — " + liveInvestmentCount + "/5 brokers") + " |",
+        "",
+        "## Section 7 — Broker-wise Investment Status",
+        "",
+        "| Broker | Invested Value | Current Value | Unrealised P&L | Return | Status |",
+        "|---|---:|---:|---:|---:|---|",
+        ...investmentBrokers.map((b) => "| " + b.broker + " | " + investmentInr(b.investment_value) + " | " + investmentInr(b.current_value) + " | " + investmentInr(b.pnl) + " | " + investmentPct(b.pnl_percent) + " | " + b.status + (b.error ? " — " + b.error.replace(/\|/g, "/") : "") + " |"),
+        "",
+        "## Section 8 — New Investment Tracking",
+        "",
+        "Net change in reported investment/cost basis since the previous successful five-broker snapshot. Market price/NAV movement is excluded.",
+        "",
+        "| Broker | Net Change Since Previous Snapshot | Status |",
+        "|---|---:|---|",
+        ...investmentBrokers.map((b) => "| " + b.broker + " | " + investmentInr(b.net_change) + " | " + (b.net_change === null ? (b.status === "LIVE" ? "BASELINE UNAVAILABLE" : b.status) : "LIVE") + " |"),
+        "| **TOTAL** | **" + investmentInr(totalNetChange) + "** | " + (netChangeKnown ? "LIVE" : "UNAVAILABLE — requires complete five-broker data and baseline") + " |",
+        "",
+        "Baseline: " + investmentBaselineStatus + (baselineError ? " — " + baselineError : ""),
+        "Scope: Equity, ETFs as represented in broker equity holdings, and Zerodha Coin mutual funds."
+      ].join("\n");
+
       return {
         content: [{
           type: "text",
@@ -987,7 +1105,21 @@ function createServer(
               complete,
               as_of: new Date().toISOString(),
             },
-            formatted_section: section,
+            formatted_section: section + "\n\n" + investmentSections,
+            investment_summary: {
+              status: allInvestmentsLive ? "LIVE" : "PARTIAL",
+              brokers: investmentBrokers,
+              total: investmentTotal,
+              scope: "Equity, ETFs as represented in equity holdings, and Zerodha Coin mutual funds.",
+              as_of: new Date().toISOString(),
+            },
+            new_investments: {
+              status: investmentBaselineStatus,
+              total_net_change: totalNetChange,
+              definition: "Change in investment/cost basis since the previous successful five-broker update; market price/NAV movement is excluded.",
+              storage: env.ZERODHA_TOKEN_STORE ? "server_kv" : "unavailable",
+              error: baselineError,
+            },
             read_only: true,
           }, null, 2),
         }],
