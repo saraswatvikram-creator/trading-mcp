@@ -11,15 +11,8 @@
   "kv_namespaces": [
     {
       "binding": "ZERODHA_TOKEN_STORE",
-      "id": "7845396b867f458f96aa96eec2b550e8"
+      "id": "7845396b867f458f96aa96eec2b550e8",
+      "preview_id": "7f14a2985d144656865867ec1303d56"
     }
-  ],
-  "previews": {
-    "kv_namespaces": [
-      {
-        "binding": "ZERODHA_TOKEN_STORE",
-        "id": "7f14a2985d144656865867ec1303d56"
-      }
-    ]
-  }
+  ]
 }
