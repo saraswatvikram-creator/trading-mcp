@@ -39,6 +39,9 @@ for (let attempt = 1; attempt <= 30; attempt++) {
     console.log("PASS: MCP initialize, hello/callTool, tools/list.");
     console.log("PASS: update_trades_margin executed and Sections 4, 6, 7, 8 returned.");
     console.log("Report status: " + String(reportJson.status ?? "unknown"));
+    console.log("Margin broker statuses: " + JSON.stringify((reportJson.margin_summary?.brokers ?? []).map((b) => ({ broker: b.broker, status: b.status, error: b.error }))));
+    console.log("Investment broker statuses: " + JSON.stringify((reportJson.investment_summary?.brokers ?? []).map((b) => ({ broker: b.broker, status: b.status, error: b.error }))));
+    console.log("Investment baseline: " + JSON.stringify(reportJson.new_investments ?? {}));
     console.log("Verified tools: " + ["hello", "update_trades_margin", "update_investments"].join(", "));
     await client.close();
     process.exit(0);
