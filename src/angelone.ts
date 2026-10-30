@@ -143,7 +143,10 @@ export async function getAngelOneHoldings(env: AngelOneEnv, includeMargin = fals
   const login = await angelOneLogin(env);
   const holdings = await angelOneGet(ANGELONE_ALL_HOLDING_URL, env, login.jwtToken);
   const data = holdings?.data ?? {};
-  const rows = Array.isArray(data?.holdings) ? data.holdings : [];
+  if (!Array.isArray(data?.holdings)) {
+    throw new Error("Angel One holdings response did not contain a valid holdings array.");
+  }
+  const rows = data.holdings;
   const total = data?.totalholding ?? {};
 
   // The consolidated Investments refresh can request RMS in this same
