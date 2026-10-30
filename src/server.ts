@@ -1018,11 +1018,18 @@ function createServer(
         const validPnl = typeof pnl === "number" && Number.isFinite(pnl)
           ? pnl : (validInvested !== null && validCurrent !== null ? validCurrent - validInvested : null);
         const live = holdingResult?.authenticated === true || holdingResult?.status === "LIVE";
-        const complete = live && validInvested !== null && validCurrent !== null;
+        const holdingRows = Array.isArray(holdingResult?.holdings) ? holdingResult.holdings : [];
+        const everyHoldingValued = holdingRows.every((holding: any) =>
+          typeof holding?.investment_value === "number" && Number.isFinite(holding.investment_value) &&
+          typeof holding?.current_value === "number" && Number.isFinite(holding.current_value)
+        );
+        const complete = live && validInvested !== null && validCurrent !== null && everyHoldingValued;
         const hasPrevious = Object.prototype.hasOwnProperty.call(previousInvestment, investmentNames[i]);
         return {
           broker: investmentNames[i], status: complete ? "LIVE" : "PARTIAL",
-          error: complete ? null : (holdingResult?.auth?.reason ?? holdingResult?.error ?? "Holdings response did not contain valid invested and current values."),
+          error: complete ? null : (holdingResult?.auth?.reason ?? holdingResult?.error ??
+            (!everyHoldingValued ? "One or more holdings are missing a valid investment cost or current market value." :
+              "Holdings response did not contain valid invested and current values.")),
           investment_value: validInvested, current_value: validCurrent, pnl: validPnl,
           pnl_percent: typeof summary.pnl_percent === "number" && Number.isFinite(summary.pnl_percent)
             ? summary.pnl_percent : (validPnl !== null && validInvested ? validPnl / validInvested * 100 : null),
