@@ -176,9 +176,9 @@ export async function getAngelOneHoldings(env: AngelOneEnv, includeMargin = fals
       quantity: Number(row?.quantity ?? 0),
       average_price: row?.averageprice !== null && row?.averageprice !== undefined && row?.averageprice !== "" && Number.isFinite(Number(row.averageprice)) ? Number(row.averageprice) : null,
       ltp: row?.ltp !== null && row?.ltp !== undefined && row?.ltp !== "" && Number.isFinite(Number(row.ltp)) ? Number(row.ltp) : null,
-      investment_value: Number.isFinite(Number(row?.averageprice)) && Number.isFinite(Number(row?.quantity))
+      investment_value: row?.averageprice !== null && row?.averageprice !== undefined && row?.averageprice !== "" && Number.isFinite(Number(row.averageprice)) && Number.isFinite(Number(row?.quantity))
         ? Number(row.averageprice) * Number(row.quantity) : null,
-      current_value: Number.isFinite(Number(row?.ltp)) && Number.isFinite(Number(row?.quantity))
+      current_value: row?.ltp !== null && row?.ltp !== undefined && row?.ltp !== "" && Number.isFinite(Number(row.ltp)) && Number.isFinite(Number(row?.quantity))
         ? Number(row.ltp) * Number(row.quantity) : null,
       pnl: Number.isFinite(Number(row?.profitandloss)) ? Number(row.profitandloss) : null,
       pnl_percent: Number.isFinite(Number(row?.pnlpercentage)) ? Number(row.pnlpercentage) : null,
