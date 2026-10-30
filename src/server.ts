@@ -5173,6 +5173,25 @@ export default {
     const url =
       new URL(request.url);
 
+    // Preview-safe diagnostic endpoint. Confirms the Worker HTTP layer
+    // responds independently of MCP Inspector tool execution.
+    if (url.pathname === "/health") {
+      return new Response(
+        JSON.stringify({
+          status: "ok",
+          service: "Vikram Trading MCP",
+          version: "1.2.0",
+          endpoint: "/health",
+          mcp_endpoint: "/mcp",
+          read_only: true,
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+        }
+      );
+    }
+
     if (
       url.pathname ===
         "/login" ||
