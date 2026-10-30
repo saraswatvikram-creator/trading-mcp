@@ -489,8 +489,8 @@ async function getZerodhaInvestmentHoldings(env: Env): Promise<any> {
     const settledQuantity = Number(r?.quantity ?? 0);
     const t1Quantity = Number(r?.t1_quantity ?? 0);
     const quantity = settledQuantity + t1Quantity;
-    const average = Number(r?.average_price);
-    const ltp = Number(r?.last_price);
+    const average = r?.average_price === null || r?.average_price === undefined || r?.average_price === "" ? Number.NaN : Number(r.average_price);
+    const ltp = r?.last_price === null || r?.last_price === undefined || r?.last_price === "" ? Number.NaN : Number(r.last_price);
     const investmentValue = Number.isFinite(average) ? average * quantity : null;
     const currentValue = Number.isFinite(ltp) ? ltp * quantity : null;
     const computedPnl = investmentValue !== null && currentValue !== null
@@ -522,8 +522,8 @@ async function getZerodhaInvestmentHoldings(env: Env): Promise<any> {
   const mfRows = Array.isArray(mfResponse?.data) ? mfResponse.data : [];
   const mutualFunds = mfRows.map((r: any) => {
     const quantity = Number(r?.quantity ?? 0);
-    const average = Number(r?.average_price);
-    const ltp = Number(r?.last_price);
+    const average = r?.average_price === null || r?.average_price === undefined || r?.average_price === "" ? Number.NaN : Number(r.average_price);
+    const ltp = r?.last_price === null || r?.last_price === undefined || r?.last_price === "" ? Number.NaN : Number(r.last_price);
     const investmentValue = Number.isFinite(average) ? average * quantity : null;
     const currentValue = Number.isFinite(ltp) ? ltp * quantity : null;
     // Kite MF holdings can report pnl=0 even while average NAV and latest NAV
