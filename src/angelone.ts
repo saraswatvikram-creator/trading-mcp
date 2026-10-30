@@ -143,7 +143,10 @@ export async function getAngelOneHoldings(env: AngelOneEnv, includeMargin = fals
   const login = await angelOneLogin(env);
   const holdings = await angelOneGet(ANGELONE_ALL_HOLDING_URL, env, login.jwtToken);
   const data = holdings?.data ?? {};
-  const rows = Array.isArray(data?.holdings) ? data.holdings : [];
+  if (!Array.isArray(data?.holdings)) {
+    throw new Error("Angel One holdings response did not contain a valid holdings array.");
+  }
+  const rows = data.holdings;
   const total = data?.totalholding ?? {};
 
   // The consolidated Investments refresh can request RMS in this same
@@ -174,11 +177,11 @@ export async function getAngelOneHoldings(env: AngelOneEnv, includeMargin = fals
       exchange: row?.exchange ?? null,
       isin: row?.isin ?? null,
       quantity: Number(row?.quantity ?? 0),
-      average_price: Number.isFinite(Number(row?.averageprice)) ? Number(row.averageprice) : null,
-      ltp: Number.isFinite(Number(row?.ltp)) ? Number(row.ltp) : null,
-      investment_value: Number.isFinite(Number(row?.averageprice)) && Number.isFinite(Number(row?.quantity))
+      average_price: row?.averageprice !== null && row?.averageprice !== undefined && row?.averageprice !== "" && Number.isFinite(Number(row.averageprice)) ? Number(row.averageprice) : null,
+      ltp: row?.ltp !== null && row?.ltp !== undefined && row?.ltp !== "" && Number.isFinite(Number(row.ltp)) ? Number(row.ltp) : null,
+      investment_value: row?.averageprice !== null && row?.averageprice !== undefined && row?.averageprice !== "" && Number.isFinite(Number(row.averageprice)) && Number.isFinite(Number(row?.quantity))
         ? Number(row.averageprice) * Number(row.quantity) : null,
-      current_value: Number.isFinite(Number(row?.ltp)) && Number.isFinite(Number(row?.quantity))
+      current_value: row?.ltp !== null && row?.ltp !== undefined && row?.ltp !== "" && Number.isFinite(Number(row.ltp)) && Number.isFinite(Number(row?.quantity))
         ? Number(row.ltp) * Number(row.quantity) : null,
       pnl: Number.isFinite(Number(row?.profitandloss)) ? Number(row.profitandloss) : null,
       pnl_percent: Number.isFinite(Number(row?.pnlpercentage)) ? Number(row.pnlpercentage) : null,
@@ -186,10 +189,10 @@ export async function getAngelOneHoldings(env: AngelOneEnv, includeMargin = fals
       collateral_quantity: Number(row?.collateralquantity ?? 0),
     })),
     summary: {
-      investment_value: Number.isFinite(Number(total?.totalinvvalue)) ? Number(total.totalinvvalue) : null,
-      current_value: Number.isFinite(Number(total?.totalholdingvalue)) ? Number(total.totalholdingvalue) : null,
-      pnl: Number.isFinite(Number(total?.totalprofitandloss)) ? Number(total.totalprofitandloss) : null,
-      pnl_percent: Number.isFinite(Number(total?.totalpnlpercentage)) ? Number(total.totalpnlpercentage) : null,
+      investment_value: total?.totalinvvalue !== null && total?.totalinvvalue !== undefined && total?.totalinvvalue !== "" && Number.isFinite(Number(total.totalinvvalue)) ? Number(total.totalinvvalue) : null,
+      current_value: total?.totalholdingvalue !== null && total?.totalholdingvalue !== undefined && total?.totalholdingvalue !== "" && Number.isFinite(Number(total.totalholdingvalue)) ? Number(total.totalholdingvalue) : null,
+      pnl: total?.totalprofitandloss !== null && total?.totalprofitandloss !== undefined && total?.totalprofitandloss !== "" && Number.isFinite(Number(total.totalprofitandloss)) ? Number(total.totalprofitandloss) : null,
+      pnl_percent: total?.totalpnlpercentage !== null && total?.totalpnlpercentage !== undefined && total?.totalpnlpercentage !== "" && Number.isFinite(Number(total.totalpnlpercentage)) ? Number(total.totalpnlpercentage) : null,
     },
     ...(includeMargin ? { margin } : {}),
     source: "Angel One SmartAPI getAllHolding",

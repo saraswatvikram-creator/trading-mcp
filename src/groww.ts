@@ -423,7 +423,10 @@ export async function getGrowwHoldings(env: GrowwEnv): Promise<any> {
   const result = await growwGetWithAutoRefresh("/v1/holdings/user", env);
   const token = result;
   const response = result.data;
-  const holdings = response?.payload?.holdings ?? response?.payload ?? [];
+  const holdings = response?.payload?.holdings ?? response?.payload;
+  if (!Array.isArray(holdings)) {
+    throw new Error("Groww holdings response did not contain a valid holdings array.");
+  }
   const symbols = holdings
     .map((row: any) => "NSE_" + String(row?.trading_symbol ?? ""))
     .filter((symbol: string) => symbol !== "NSE_");
@@ -444,9 +447,10 @@ export async function getGrowwHoldings(env: GrowwEnv): Promise<any> {
 
   const normalized = holdings.map((row: any) => {
     const quantity = Number(row?.quantity ?? 0);
-    const average = Number(row?.average_price);
+    const average = row?.average_price === null || row?.average_price === undefined || row?.average_price === "" ? Number.NaN : Number(row.average_price);
     const symbol = String(row?.trading_symbol ?? "");
-    const ltp = Number(ltps["NSE_" + symbol]);
+    const rawLtp = ltps["NSE_" + symbol];
+    const ltp = rawLtp === null || rawLtp === undefined || rawLtp === "" ? Number.NaN : Number(rawLtp);
     const investmentValue = Number.isFinite(average) ? average * quantity : null;
     const currentValue = Number.isFinite(ltp) ? ltp * quantity : null;
     const pnl = investmentValue !== null && currentValue !== null

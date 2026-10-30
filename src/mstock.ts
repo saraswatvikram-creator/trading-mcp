@@ -231,8 +231,8 @@ async function loginWithTotp(env: MStockEnv, manualTotp?: string) {
 
 function normalize(row: any) {
   const quantity = Number(row?.quantity ?? 0);
-  const average = Number(row?.average_price);
-  const last = Number(row?.last_price);
+  const average = row?.average_price === null || row?.average_price === undefined || row?.average_price === "" ? Number.NaN : Number(row.average_price);
+  const last = row?.last_price === null || row?.last_price === undefined || row?.last_price === "" ? Number.NaN : Number(row.last_price);
   const brokerUnrealised = Number(row?.unrealised);
   const brokerRealised = Number(row?.realised);
 
@@ -329,11 +329,14 @@ export async function getMStockHoldings(env: MStockEnv, totp?: string): Promise<
   if (!token) throw new Error("MSTOCK_AUTH_REQUIRED: No m.Stock access token is stored.");
 
   const response = await get("/openapi/typea/portfolio/holdings", apiKey, token);
-  const rows = Array.isArray(response?.data) ? response.data : [];
+  if (!Array.isArray(response?.data)) {
+    throw new Error("m.Stock holdings response did not contain a valid data array.");
+  }
+  const rows = response.data;
   const normalized = rows.map((row: any) => {
     const quantity = Number(row?.quantity ?? 0);
-    const average = Number(row?.average_price);
-    const ltp = Number(row?.last_price);
+    const average = row?.average_price === null || row?.average_price === undefined || row?.average_price === "" ? Number.NaN : Number(row.average_price);
+    const ltp = row?.last_price === null || row?.last_price === undefined || row?.last_price === "" ? Number.NaN : Number(row.last_price);
     const investmentValue = Number.isFinite(average) ? average * quantity : null;
     const currentValue = Number.isFinite(ltp) ? ltp * quantity : null;
     const brokerPnl = Number(row?.pnl);
