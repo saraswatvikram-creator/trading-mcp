@@ -673,7 +673,7 @@ function createServer(
             : "### Trading Desk NOT READY — no broker authenticated",
         "",
         payload.status === "READY" || payload.status === "PARTIAL_READY"
-          ? "Run **Update Trades** and **Update Investments**. Each report should include every broker whose authentication/API call succeeds and identify unavailable brokers individually; one broker failure must not block the others."
+          ? "Run **Update Trades** only. The consolidated report includes the investment sections. Each report should include every broker whose authentication/API call succeeds and identify unavailable brokers individually; one broker failure must not block the others."
           : "No broker is currently authenticated, so broker data cannot be refreshed. Complete at least one broker authentication and run **Update Auth** again.",
         "",
         "### Automation note",
