@@ -1048,10 +1048,16 @@ function createServer(
       const sumInvestmentField = (field: "investment_value" | "current_value" | "pnl") =>
         investmentBrokers.reduce((sum, b) => sum + (typeof b[field] === "number" ? b[field] as number : 0), 0);
       const liveInvestmentCount = investmentBrokers.filter((b) => b.status === "LIVE").length;
-      const investmentTotal: any = {
+      // Do not present a partial broker subtotal as the full portfolio total.
+      // Show consolidated totals only when all five broker holdings are live.
+      const investmentTotal: any = allInvestmentsLive ? {
         investment_value: sumInvestmentField("investment_value"),
         current_value: sumInvestmentField("current_value"),
         pnl: sumInvestmentField("pnl"),
+      } : {
+        investment_value: null,
+        current_value: null,
+        pnl: null,
       };
       investmentTotal.pnl_percent = investmentTotal.investment_value
         ? investmentTotal.pnl / investmentTotal.investment_value * 100 : null;
