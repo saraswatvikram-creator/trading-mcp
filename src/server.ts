@@ -695,7 +695,7 @@ function createServer(
   server.registerTool(
     "update_investments",
     {
-      description: "Return the live consolidated Investments Dashboard across Zerodha equity and Coin mutual funds, Angel One, Groww, 5Paisa and m.Stock. Read-only. One broker failure does not block the other brokers.",
+      description: "LEGACY COMPATIBILITY ONLY. Returns the Investments Dashboard for comparison during migration. Does not update the shared investment baseline; only Update Trades advances that baseline. Use Update Trades for the consolidated daily report. Read-only.",
     },
     async () => {
       const results = await Promise.allSettled([
@@ -747,21 +747,27 @@ function createServer(
       results.forEach((r, i) => {
         if (r.status === "fulfilled") {
           const v: any = r.value;
-          const investmentValue = Number.isFinite(Number(v?.summary?.investment_value))
-            ? Number(v.summary.investment_value)
+          const rawInvestmentValue = v?.summary?.investment_value;
+          const rawCurrentValue = v?.summary?.current_value;
+          const investmentValue = typeof rawInvestmentValue === "number" && Number.isFinite(rawInvestmentValue)
+            ? rawInvestmentValue
             : null;
+          const currentValue = typeof rawCurrentValue === "number" && Number.isFinite(rawCurrentValue)
+            ? rawCurrentValue
+            : null;
+          const validHoldingSummary = investmentValue !== null && currentValue !== null;
           const hasPrevious = Object.prototype.hasOwnProperty.call(previousInvestment, names[i]);
           brokers.push({
             broker: names[i],
-            status: "LIVE",
-            error: null,
+            status: validHoldingSummary ? "LIVE" : "PARTIAL",
+            error: validHoldingSummary ? null : "Holdings response did not contain valid numeric invested and current values.",
             investment_value: investmentValue,
             new_investment_since_last_update: baselineAvailable && hasPrevious && investmentValue !== null
               ? investmentValue - previousInvestment[names[i]]
               : null,
-            current_value: v?.summary?.current_value ?? null,
-            pnl: v?.summary?.pnl ?? null,
-            pnl_percent: v?.summary?.pnl_percent ?? null,
+            current_value: currentValue,
+            pnl: typeof v?.summary?.pnl === "number" && Number.isFinite(v.summary.pnl) ? v.summary.pnl : null,
+            pnl_percent: typeof v?.summary?.pnl_percent === "number" && Number.isFinite(v.summary.pnl_percent) ? v.summary.pnl_percent : null,
           });
           for (const h of v?.holdings ?? []) holdings.push({ broker: names[i], ...h });
         } else {
@@ -785,19 +791,11 @@ function createServer(
         (b) => b.status === "LIVE" && Number.isFinite(b.investment_value)
       );
 
-      let baselineStatus: "ESTABLISHED" | "UPDATED" | "UNAVAILABLE" = "UNAVAILABLE";
-      if (env.ZERODHA_TOKEN_STORE && allBrokersLive) {
-        const nextSnapshot: Record<string, number> = {};
-        for (const broker of brokers) {
-          nextSnapshot[broker.broker] = broker.investment_value;
-        }
-        try {
-          await env.ZERODHA_TOKEN_STORE.put(snapshotKey, JSON.stringify(nextSnapshot));
-          baselineStatus = baselineAvailable ? "UPDATED" : "ESTABLISHED";
-        } catch (error) {
-          snapshotError = error instanceof Error ? error.message : String(error);
-        }
-      }
+      // Legacy command is deliberately non-mutating during migration.
+      // The consolidated Update Trades command is the sole writer of this shared baseline.
+      const baselineStatus = baselineAvailable
+        ? "READ_ONLY — baseline is advanced only by Update Trades"
+        : "UNAVAILABLE — baseline not yet established by Update Trades";
 
       const total = holdings.reduce((s: any, h: any) => {
         if (Number.isFinite(h.investment_value)) s.investment_value += h.investment_value;
