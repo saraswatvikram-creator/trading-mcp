@@ -24,3 +24,8 @@ jobs:
 
       - name: Build
         run: npm run deploy -- --dry-run
+
+      - name: MCP Preview smoke test (initialize, hello, tools/list)
+        env:
+          PREVIEW_MCP_URL: https://feature-combined-trades-investments-trading-mcp.saraswat-vikram.workers.dev/mcp
+        run: node scripts/preview-mcp-smoke.mjs
