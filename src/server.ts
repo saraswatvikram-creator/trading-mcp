@@ -482,7 +482,7 @@ async function getNfoInstrumentMaster(
 // CS MODEL — AUTHENTICATED READ-ONLY TOOL ALLOWLIST
 // ============================================================
 
-function registerCsModelReadOnlyTools(server: McpServer, env: Env): void {
+function registerCsModelReadOnlyTools(server: McpServer, env: Env, baseUrl: string): void {
   server.registerTool(
     "cs_model_market_snapshot",
     {
@@ -552,7 +552,7 @@ function registerCsModelReadOnlyTools(server: McpServer, env: Env): void {
         getZerodhaMargin(env),
         getAngelOneMargin(env),
         getGrowwMargin(env),
-        getFivePaisaMargin(env, "https://trading-mcp.saraswat-vikram.workers.dev"),
+        getFivePaisaMargin(env, baseUrl),
         getMStockMargin(env),
       ]);
       const brokers = results.map((r, i) => {
@@ -5150,7 +5150,7 @@ export default {
     }
 
     if (url.pathname === "/cs-model/mcp") {
-      return handleCsModelMcp(request, env, ctx, (server) => registerCsModelReadOnlyTools(server, env));
+      return handleCsModelMcp(request, env, ctx, (server) => registerCsModelReadOnlyTools(server, env, url.origin));
     }
 
     return createMcpHandler(
