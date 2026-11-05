@@ -542,6 +542,90 @@ function registerCsModelReadOnlyTools(server: McpServer, env: Env, baseUrl: stri
   );
 
   server.registerTool(
+    "cs_model_option_chain",
+    {
+      description: "Read a live NIFTY or BANKNIFTY option chain for a selected expiry, including spot, strikes, lot size, LTP, bid/ask, quantities, OI and volume. Read-only.",
+      inputSchema: {
+        underlying: z.enum(["NIFTY", "BANKNIFTY"]),
+        expiry: z.string().optional(),
+        strikes_each_side: z.number().int().min(5).max(30).optional(),
+      },
+    },
+    async ({ underlying, expiry, strikes_each_side }) => {
+      const instruments = await getNfoInstrumentMaster(env);
+      const spotSymbol = underlying === "NIFTY" ? "NSE:NIFTY 50" : "NSE:NIFTY BANK";
+      const spotPayload = await zerodhaGet("/quote?" + new URLSearchParams({ i: spotSymbol }).toString(), env) as any;
+      const spot = spotPayload?.data?.[spotSymbol]?.last_price;
+      if (typeof spot !== "number" || !Number.isFinite(spot) || spot <= 0) {
+        throw new Error("Live underlying spot is unavailable");
+      }
+      const today = new Date().toISOString().slice(0, 10);
+      const options = instruments.filter(row =>
+        row.name === underlying && row.segment === "NFO-OPT" &&
+        (row.instrument_type === "CE" || row.instrument_type === "PE")
+      );
+      const expiries = [...new Set(options.map(row => row.expiry))].filter(d => d >= today).sort();
+      const selectedExpiry = !expiry || expiry === "nearest" ? expiries[0] : expiry;
+      if (!selectedExpiry || !expiries.includes(selectedExpiry)) {
+        throw new Error("Requested expiry unavailable; available expiries: " + expiries.slice(0, 12).join(", "));
+      }
+      const contracts = options.filter(row => row.expiry === selectedExpiry);
+      const strikes = [...new Set(contracts.map(row => Number(row.strike)).filter(n => Number.isFinite(n) && n > 0))].sort((a,b)=>a-b);
+      if (!strikes.length) throw new Error("No strikes available for selected expiry");
+      let atmIndex = 0;
+      for (let i=1;i<strikes.length;i++) if (Math.abs(strikes[i]-spot)<Math.abs(strikes[atmIndex]-spot)) atmIndex=i;
+      const side = strikes_each_side ?? 20;
+      const selected = strikes.slice(Math.max(0,atmIndex-side), Math.min(strikes.length,atmIndex+side+1));
+      const byStrike = new Map<number, { CE?: Record<string,string>; PE?: Record<string,string> }>();
+      for (const row of contracts) {
+        const strike=Number(row.strike);
+        if (!selected.includes(strike)) continue;
+        const entry=byStrike.get(strike) ?? {};
+        if (row.instrument_type === "CE") entry.CE=row;
+        if (row.instrument_type === "PE") entry.PE=row;
+        byStrike.set(strike,entry);
+      }
+      const symbols:string[]=[];
+      for (const strike of selected) {
+        const entry=byStrike.get(strike);
+        if(entry?.CE) symbols.push("NFO:"+entry.CE.tradingsymbol);
+        if(entry?.PE) symbols.push("NFO:"+entry.PE.tradingsymbol);
+      }
+      const params=new URLSearchParams();
+      for(const symbol of symbols) params.append("i",symbol);
+      const quotes=await zerodhaGet("/quote?"+params.toString(),env) as any;
+      const quoteFor=(row?:Record<string,string>) => {
+        if(!row) return null;
+        const symbol="NFO:"+row.tradingsymbol;
+        const q=quotes?.data?.[symbol];
+        return {
+          symbol:row.tradingsymbol,
+          instrument_token:Number(row.instrument_token),
+          lot_size:Number(row.lot_size),
+          ltp:q?.last_price ?? null,
+          bid:q?.depth?.buy?.[0]?.price ?? null,
+          bid_quantity:q?.depth?.buy?.[0]?.quantity ?? null,
+          ask:q?.depth?.sell?.[0]?.price ?? null,
+          ask_quantity:q?.depth?.sell?.[0]?.quantity ?? null,
+          oi:q?.oi ?? null,
+          volume:q?.volume ?? null,
+          quote_timestamp:q?.timestamp ?? q?.last_trade_time ?? null,
+        };
+      };
+      const chain=selected.map(strike=>{
+        const entry=byStrike.get(strike);
+        return { strike, CE:quoteFor(entry?.CE), PE:quoteFor(entry?.PE) };
+      });
+      const lotSize=Number(contracts.find(row=>Number(row.lot_size)>0)?.lot_size ?? 0);
+      return {content:[{type:"text",text:JSON.stringify({
+        status:"LIVE",underlying,expiry:selectedExpiry,spot,atm_strike:strikes[atmIndex],
+        lot_size:lotSize,strikes_each_side:side,quote_count:symbols.length,
+        as_of:new Date().toISOString(),chain,read_only:true
+      },null,2)}]};
+    }
+  );
+
+  server.registerTool(
     "cs_model_five_broker_margin",
     {
       description: "Read available-for-options margin from the same consolidated five-broker flow: Zerodha, Angel One, Groww, 5Paisa and m.Stock. Returns each broker separately and a combined total only when all five are live. Read-only.",
