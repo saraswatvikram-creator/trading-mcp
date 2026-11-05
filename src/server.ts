@@ -6,8 +6,10 @@ import { registerFivePaisaTools, handleFivePaisaCallback, getFivePaisaHoldings, 
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 import { runUpdateAuth, handleAuthRoute } from "./auth";
+import { handleCsModelMcp } from "./cs-model";
 
 type Env = {
+  CS_MODEL_API_TOKEN?: string;
   ZERODHA_API_KEY: string;
   ZERODHA_API_SECRET: string;
   ZERODHA_ACCESS_TOKEN?: string;
@@ -5035,6 +5037,10 @@ export default {
 
     if (url.pathname === "/fivepaisa/callback") {
       return handleFivePaisaCallback(request, env);
+    }
+
+    if (url.pathname === "/cs-model/mcp") {
+      return handleCsModelMcp(request, env, ctx);
     }
 
     return createMcpHandler(
