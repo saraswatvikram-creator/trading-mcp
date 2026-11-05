@@ -1,0 +1,10 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "cs-model-trading-bridge-staging",
+  "compatibility_date": "2026-06-11",
+  "compatibility_flags": ["nodejs_compat"],
+  "main": "src/cs-model-staging.ts",
+  "vars": {
+    "CS_MODEL_STAGING": "true"
+  }
+}
