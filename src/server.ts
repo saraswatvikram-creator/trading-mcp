@@ -479,6 +479,116 @@ async function getNfoInstrumentMaster(
 }
 
 // ============================================================
+// CS MODEL — AUTHENTICATED READ-ONLY TOOL ALLOWLIST
+// ============================================================
+
+function registerCsModelReadOnlyTools(server: McpServer, env: Env): void {
+  server.registerTool(
+    "cs_model_market_snapshot",
+    {
+      description: "Read live NIFTY, BANKNIFTY and India VIX quotes from Zerodha. Read-only.",
+    },
+    async () => {
+      const symbols = ["NSE:NIFTY 50", "NSE:NIFTY BANK", "NSE:INDIA VIX"];
+      const params = new URLSearchParams();
+      for (const symbol of symbols) params.append("i", symbol);
+      const response = await zerodhaGet("/quote?" + params.toString(), env) as any;
+      const rows = response?.data ?? {};
+      const result: Record<string, unknown> = {};
+      for (const [key, symbol] of [
+        ["NIFTY", "NSE:NIFTY 50"],
+        ["BANKNIFTY", "NSE:NIFTY BANK"],
+        ["INDIA_VIX", "NSE:INDIA VIX"],
+      ]) {
+        const q = rows[symbol];
+        result[key] = q ? {
+          last_price: q.last_price ?? null,
+          timestamp: q.timestamp ?? q.last_trade_time ?? null,
+          instrument: symbol,
+        } : null;
+      }
+      return { content: [{ type: "text", text: JSON.stringify({
+        status: symbols.every(symbol => rows[symbol]) ? "LIVE" : "PARTIAL",
+        as_of: new Date().toISOString(),
+        quotes: result,
+        read_only: true,
+      }, null, 2) }] };
+    }
+  );
+
+  server.registerTool(
+    "cs_model_expiries",
+    {
+      description: "Read available current/future NIFTY and BANKNIFTY option expiries and contract lot sizes from the NFO instrument master. Read-only.",
+    },
+    async () => {
+      const instruments = await getNfoInstrumentMaster(env);
+      const output: Record<string, unknown> = {};
+      for (const underlying of ["NIFTY", "BANKNIFTY"]) {
+        const contracts = instruments.filter(row =>
+          row.name === underlying && row.segment === "NFO-OPT" &&
+          (row.instrument_type === "CE" || row.instrument_type === "PE")
+        );
+        const today = new Date().toISOString().slice(0, 10);
+        const expiries = [...new Set(contracts.map(row => row.expiry))]
+          .filter(date => date >= today).sort();
+        const lotSizes = [...new Set(contracts.map(row => Number(row.lot_size)).filter(n => Number.isInteger(n) && n > 0))];
+        output[underlying] = { expiries, lot_sizes: lotSizes };
+      }
+      return { content: [{ type: "text", text: JSON.stringify({
+        as_of: new Date().toISOString(), instruments: output, read_only: true
+      }, null, 2) }] };
+    }
+  );
+
+  server.registerTool(
+    "cs_model_five_broker_margin",
+    {
+      description: "Read available-for-options margin from the same consolidated five-broker flow: Zerodha, Angel One, Groww, 5Paisa and m.Stock. Returns each broker separately and a combined total only when all five are live. Read-only.",
+    },
+    async () => {
+      const names = ["Zerodha", "Angel One", "Groww", "5Paisa", "m.Stock"];
+      const results = await Promise.allSettled([
+        getZerodhaMargin(env),
+        getAngelOneMargin(env),
+        getGrowwMargin(env),
+        getFivePaisaMargin(env, "https://trading-mcp.saraswat-vikram.workers.dev"),
+        getMStockMargin(env),
+      ]);
+      const brokers = results.map((r, i) => {
+        if (r.status !== "fulfilled") return {
+          broker: names[i], status: "ERROR",
+          available_for_options: null,
+          error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+        };
+        const value: any = r.value;
+        const amount = value?.available_for_options;
+        const numeric = amount !== null && amount !== undefined && amount !== "" && Number.isFinite(Number(amount))
+          ? Number(amount) : null;
+        return {
+          broker: names[i],
+          status: value?.status === "LIVE" && numeric !== null ? "LIVE" : "PARTIAL",
+          available_for_options: numeric,
+          source: value?.source ?? null,
+          as_of: value?.as_of ?? null,
+          error: numeric === null ? (value?.error ?? value?.message ?? "No numeric available margin returned") : null,
+        };
+      });
+      const complete = brokers.every(b => b.status === "LIVE" && b.available_for_options !== null);
+      return { content: [{ type: "text", text: JSON.stringify({
+        status: complete ? "LIVE" : "PARTIAL",
+        total_available_for_options: complete
+          ? brokers.reduce((sum, b) => sum + Number(b.available_for_options), 0)
+          : null,
+        brokers,
+        as_of: new Date().toISOString(),
+        read_only: true,
+      }, null, 2) }] };
+    }
+  );
+}
+
+// ============================================================
 // MCP SERVER
 // ============================================================
 
@@ -5040,7 +5150,7 @@ export default {
     }
 
     if (url.pathname === "/cs-model/mcp") {
-      return handleCsModelMcp(request, env, ctx);
+      return handleCsModelMcp(request, env, ctx, (server) => registerCsModelReadOnlyTools(server, env));
     }
 
     return createMcpHandler(
