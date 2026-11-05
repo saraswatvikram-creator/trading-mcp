@@ -1,0 +1,28 @@
+name: CS Model staging build validation
+
+on:
+  push:
+    branches:
+      - cs-model-secure-integration
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  staging-dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out isolated branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Bundle staging Worker without deploying
+        run: npx wrangler deploy --dry-run --config wrangler.cs-model-staging.jsonc --outdir .wrangler/cs-model-staging-dry-run
