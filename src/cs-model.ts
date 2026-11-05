@@ -23,7 +23,8 @@ function constantTimeEqual(a: string, b: string): boolean {
 export function handleCsModelMcp(
   request: Request,
   env: CsModelEnv,
-  ctx: ExecutionContext
+  ctx: ExecutionContext,
+  registerReadOnlyTools: (server: McpServer) => void
 ): Promise<Response> | Response {
   const configuredToken = env.CS_MODEL_API_TOKEN;
   if (!configuredToken) {
@@ -48,8 +49,6 @@ export function handleCsModelMcp(
       version: "0.1.0",
     });
 
-    // Connectivity probe only. Add approved read-only market-data tools
-    // after their data sources and schemas have been verified.
     server.registerTool(
       "cs_model_hello",
       { description: "Read-only CS Model secure connectivity test." },
@@ -58,6 +57,8 @@ export function handleCsModelMcp(
       })
     );
 
+    // Only the explicitly supplied read-only allowlist is registered here.
+    registerReadOnlyTools(server);
     return server;
   })(request, env, ctx);
 }
