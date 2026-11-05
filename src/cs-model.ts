@@ -24,7 +24,7 @@ export function handleCsModelMcp(
   request: Request,
   env: CsModelEnv,
   ctx: ExecutionContext,
-  registerReadOnlyTools: (server: McpServer) => void
+  registerReadOnlyTools: (server: McpServer) => void = () => {}
 ): Promise<Response> | Response {
   const configuredToken = env.CS_MODEL_API_TOKEN;
   if (!configuredToken) {
