@@ -1234,6 +1234,91 @@ function createServer(
   );
 
   // ==========================================================
+  // HISTORICAL CANDLES
+  // ==========================================================
+
+  server.registerTool(
+    "zerodha_historical_data",
+    {
+      description:
+        "Fetch read-only historical OHLCV candles from Zerodha Kite Connect for a numeric instrument token. Supports minute, 3minute, 5minute, 10minute, 15minute, 30minute, 60minute and day intervals. Use YYYY-MM-DD HH:mm:ss in IST for from/to. Intraday requests are limited to 31 days; daily requests to 365 days. Does not place or modify orders.",
+      inputSchema: {
+        instrument_token: z.number().int().positive(),
+        interval: z.enum([
+          "minute",
+          "3minute",
+          "5minute",
+          "10minute",
+          "15minute",
+          "30minute",
+          "60minute",
+          "day",
+        ]),
+        from: z.string().regex(
+          /^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$/,
+          "Use YYYY-MM-DD HH:mm:ss in IST."
+        ),
+        to: z.string().regex(
+          /^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$/,
+          "Use YYYY-MM-DD HH:mm:ss in IST."
+        ),
+      },
+    },
+    async ({ instrument_token, interval, from, to }) => {
+      // Fixed-width local timestamps can be compared lexically after schema validation.
+      const fromMs = Date.parse(from.replace(" ", "T") + "+05:30");
+      const toMs = Date.parse(to.replace(" ", "T") + "+05:30");
+      if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) {
+        throw new Error("Invalid historical date/time. Supply valid IST timestamps.");
+      }
+      if (fromMs >= toMs) {
+        throw new Error("'from' must be earlier than 'to'.");
+      }
+      const maxRangeMs =
+        interval === "day"
+          ? 365 * 24 * 60 * 60 * 1000
+          : 31 * 24 * 60 * 60 * 1000;
+      if (toMs - fromMs > maxRangeMs) {
+        throw new Error(
+          interval === "day"
+            ? "Daily historical requests are limited to 365 days."
+            : "Intraday historical requests are limited to 31 days."
+        );
+      }
+
+      const params = new URLSearchParams({ from, to });
+      const response = await zerodhaGet(
+        "/instruments/historical/" +
+          instrument_token +
+          "/" +
+          interval +
+          "?" +
+          params.toString(),
+        env
+      ) as any;
+      const candles = Array.isArray(response?.data?.candles)
+        ? response.data.candles
+        : [];
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            broker: "Zerodha Kite Connect",
+            instrument_token,
+            interval,
+            from,
+            to,
+            candle_count: candles.length,
+            candles,
+            read_only: true,
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  // ==========================================================
   // INSTRUMENTS
   // ==========================================================
 
