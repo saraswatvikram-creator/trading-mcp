@@ -6,12 +6,13 @@
   "scripts": {
     "start": "vite dev",
     "deploy": "vite build && wrangler deploy",
-    "types": "wrangler types env.d.ts --include-runtime false"
+    "types": "wrangler types env.d.ts --include-runtime false",
+    "build": "vite build"
   },
   "dependencies": {
     "@cloudflare/kumo": "^2.6.0",
-    "@modelcontextprotocol/sdk": "1.32.1",
-    "@modelcontextprotocol/server": "2.3.1",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@modelcontextprotocol/server": "2.4.0",
     "@phosphor-icons/react": "^2.1.10",
     "agents": "*",
     "react": "^19.2.7",
