@@ -1255,11 +1255,11 @@ function createServer(
           "day",
         ]),
         from: z.string().regex(
-          /^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$/,
+          /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
           "Use YYYY-MM-DD HH:mm:ss in IST."
         ),
         to: z.string().regex(
-          /^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$/,
+          /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
           "Use YYYY-MM-DD HH:mm:ss in IST."
         ),
       },
@@ -1268,7 +1268,16 @@ function createServer(
       // Fixed-width local timestamps can be compared lexically after schema validation.
       const fromMs = Date.parse(from.replace(" ", "T") + "+05:30");
       const toMs = Date.parse(to.replace(" ", "T") + "+05:30");
-      if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) {
+      const isValidIstTimestamp = (value: string, milliseconds: number) =>
+        Number.isFinite(milliseconds) &&
+        new Date(milliseconds + 330 * 60 * 1000)
+          .toISOString()
+          .slice(0, 19)
+          .replace("T", " ") === value;
+      if (
+        !isValidIstTimestamp(from, fromMs) ||
+        !isValidIstTimestamp(to, toMs)
+      ) {
         throw new Error("Invalid historical date/time. Supply valid IST timestamps.");
       }
       if (fromMs >= toMs) {
