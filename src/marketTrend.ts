@@ -164,36 +164,6 @@ function calculateIndicators(candles: Candle[]) {
   };
 }
 
-function aggregateThreeHour(candles: Candle[]): Candle[] {
-  const byDate = new Map<string, Candle[]>();
-  for (const candle of candles) {
-    const date = candle[0].slice(0, 10);
-    const time = candle[0].slice(11, 16);
-    if (time === "15:15") continue;
-    const bucket = byDate.get(date) ?? [];
-    bucket.push(candle);
-    byDate.set(date, bucket);
-  }
-
-  const result: Candle[] = [];
-  for (const [date, session] of byDate) {
-    session.sort((a, b) => a[0].localeCompare(b[0]));
-    for (const start of [0, 3]) {
-      const group = session.slice(start, start + 3);
-      if (group.length !== 3) continue;
-      result.push([
-        date + (start === 0 ? "T09:15:00+0530" : "T12:15:00+0530"),
-        group[0][1],
-        Math.max(...group.map((c) => c[2])),
-        Math.min(...group.map((c) => c[3])),
-        group[2][4],
-        group.reduce((sum, c) => sum + (Number(c[5]) || 0), 0),
-      ]);
-    }
-  }
-  return result;
-}
-
 function summarize(name: string, candles: Candle[], timeframe: string) {
   if (candles.length < 55) {
     throw new Error(name + " " + timeframe + " has only " + candles.length + " usable candles; at least 55 are required for EMA50 and DMI/ADX.");
@@ -247,9 +217,9 @@ export function registerMarketTrendTool(
         const hourlyCandles: Candle[] = Array.isArray(hourlyResponse?.data?.candles) ? hourlyResponse.data.candles : [];
         // Exclude the current session from intraday aggregation so incomplete live candles cannot create false signals.
         const completedHourly = hourlyCandles.filter((c) => c[0].slice(0, 10) < today);
-        const threeHourCandles = aggregateThreeHour(completedHourly);
+        const completedHourlyCandles = completedHourly;
         const daily = summarize(instrument.name, dailyCandles, "1D");
-        const threeHour = summarize(instrument.name, threeHourCandles, "3H (aggregated from completed 60-minute candles)");
+        const threeHour = summarize(instrument.name, completedHourlyCandles, "60M (completed candles)");
         return {
           instrument: instrument.name,
           daily,
@@ -270,7 +240,7 @@ export function registerMarketTrendTool(
               primary_trend: "SuperTrend (10,3)",
               moving_averages: ["EMA20", "EMA50"],
               trend_strength: "DMI / ADX(14); ADX >=25 strong, 20-25 developing, below 20 weak/non-trending",
-              timeframes: ["Daily", "Completed 3-hour candles aggregated from 60-minute OHLC"],
+              timeframes: ["Daily", "Completed 60-minute OHLC candles"],
               lookback_days: lookback_days ?? 300,
               current_session_intraday_candles_excluded: true,
             },
