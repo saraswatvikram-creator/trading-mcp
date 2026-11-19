@@ -116,6 +116,30 @@ Historical P&L is maintained manually in Google Sheets.
 
 **Update Trades margin integration:** every Update Trades run must call the `update_trades_margin` tool and render its `formatted_section` as **Section 4 — Available Margin for Options**. Keep the five broker rows and combined total sourced from that live response; if any broker API fails or returns a non-numeric value, show that broker as unavailable and withhold the combined total. Move **New Trades — Today** to Section 5. This tool uses the same five margin API helpers as Update Investments and is read-only.
 
+### Update Trades — Market Trend section
+
+Every **Update Trades** run must begin with **Section 1 — Market Trend & Momentum Assessment** by calling the read-only `market_trend_assessment` tool against the deployed Worker.
+
+Render the NIFTY 50 and BANK NIFTY results separately, showing:
+- Daily and 60-minute timeframe direction
+- EMA20 / EMA50 alignment
+- SuperTrend (10,3) direction
+- DMI (+DI / -DI)
+- ADX(14), strength classification and ADX slope
+- Overall multi-timeframe assessment
+
+Use only completed candles. Display the assessment timestamp and latest completed candle timestamp. If the tool is unavailable or fails, show Section 1 as unavailable with the actual error; never reuse a prior assessment or silently omit the section.
+
+The existing five Update Trades sections remain unchanged in content and order after the new section is inserted. Their numbering becomes:
+1. Market Trend & Momentum Assessment
+2. Trade Summary
+3. Portfolio Totals
+4. Open Spread Details
+5. Available Margin for Options
+6. Execution Status
+
+The existing margin tool remains mandatory on every Update Trades run and supplies Section 5. Do not add Closed Positions — Today or New Trades — Today. This workflow is read-only and must not place, modify, cancel or square off orders.
+
 ### Trading Desk RAG — 75% Target / MTM
 
 The **75% Target / MTM** dashboard column uses the following RAG thresholds against Max Profit:
