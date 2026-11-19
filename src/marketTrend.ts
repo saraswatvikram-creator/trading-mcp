@@ -224,7 +224,7 @@ export function registerMarketTrendTool(
           instrument: instrument.name,
           daily,
           intraday,
-          overall_assessment: classify(daily, threeHour),
+          overall_assessment: classify(daily, intraday),
         };
       }));
 
