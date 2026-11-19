@@ -207,7 +207,7 @@ export function registerMarketTrendTool(
       const now = istNow();
       const today = formatIst(now).slice(0, 10);
       const dailyFrom = formatIst(shiftDays(now, lookback_days ?? 300)).slice(0, 10) + " 00:00:00";
-      const intradayFrom = formatIst(shiftDays(now, 31)).slice(0, 10) + " 09:15:00";
+      const intradayFrom = formatIst(shiftDays(now, 30)).slice(0, 10) + " 09:15:00";
       const to = formatIst(now);
       const instruments = [
         { name: "NIFTY 50", token: 256265 },
