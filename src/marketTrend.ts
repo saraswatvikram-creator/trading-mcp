@@ -82,42 +82,54 @@ function calculateIndicators(candles: Candle[]) {
     supertrend[i] = direction[i] === "BULLISH" ? finalLower[i] : finalUpper[i];
   }
 
+  // Wilder-smoothed DMI/ADX(14), matching the standard directional movement method.
   const plusDm = Array(candles.length).fill(0);
   const minusDm = Array(candles.length).fill(0);
   for (let i = 1; i < candles.length; i++) {
-    const up = high[i] - high[i - 1];
-    const down = low[i - 1] - low[i];
-    plusDm[i] = up > down && up > 0 ? up : 0;
-    minusDm[i] = down > up && down > 0 ? down : 0;
+    const upMove = high[i] - high[i - 1];
+    const downMove = low[i - 1] - low[i];
+    plusDm[i] = upMove > downMove && upMove > 0 ? upMove : 0;
+    minusDm[i] = downMove > upMove && downMove > 0 ? downMove : 0;
   }
 
   const plusDi: Array<number | null> = Array(candles.length).fill(null);
   const minusDi: Array<number | null> = Array(candles.length).fill(null);
   const dx: Array<number | null> = Array(candles.length).fill(null);
-  for (let i = 13; i < candles.length; i++) {
-    const start = Math.max(1, i - 13);
-    const trSum = tr.slice(start, i + 1).reduce((sum, value) => sum + value, 0);
-    const plusSum = plusDm.slice(start, i + 1).reduce((sum, value) => sum + value, 0);
-    const minusSum = minusDm.slice(start, i + 1).reduce((sum, value) => sum + value, 0);
-    if (trSum > 0) {
-      plusDi[i] = 100 * plusSum / trSum;
-      minusDi[i] = 100 * minusSum / trSum;
-      const denominator = plusDi[i]! + minusDi[i]!;
-      dx[i] = denominator > 0 ? 100 * Math.abs(plusDi[i]! - minusDi[i]!) / denominator : 0;
+  const dmiPeriod = 14;
+  if (candles.length > dmiPeriod) {
+    let smoothedTr = tr.slice(1, dmiPeriod + 1).reduce((sum, value) => sum + value, 0);
+    let smoothedPlusDm = plusDm.slice(1, dmiPeriod + 1).reduce((sum, value) => sum + value, 0);
+    let smoothedMinusDm = minusDm.slice(1, dmiPeriod + 1).reduce((sum, value) => sum + value, 0);
+
+    for (let i = dmiPeriod; i < candles.length; i++) {
+      if (i > dmiPeriod) {
+        smoothedTr = smoothedTr - smoothedTr / dmiPeriod + tr[i];
+        smoothedPlusDm = smoothedPlusDm - smoothedPlusDm / dmiPeriod + plusDm[i];
+        smoothedMinusDm = smoothedMinusDm - smoothedMinusDm / dmiPeriod + minusDm[i];
+      }
+      if (smoothedTr > 0) {
+        plusDi[i] = 100 * smoothedPlusDm / smoothedTr;
+        minusDi[i] = 100 * smoothedMinusDm / smoothedTr;
+        const denominator = plusDi[i]! + minusDi[i]!;
+        dx[i] = denominator > 0
+          ? 100 * Math.abs(plusDi[i]! - minusDi[i]!) / denominator
+          : 0;
+      }
     }
   }
 
   const adx: Array<number | null> = Array(candles.length).fill(null);
   const firstDx = dx.findIndex((value) => value !== null);
-  if (firstDx >= 0 && candles.length >= firstDx + 14) {
-    const seed = dx.slice(firstDx, firstDx + 14).filter((value): value is number => value !== null);
-    if (seed.length === 14) {
-      let current = seed.reduce((sum, value) => sum + value, 0) / 14;
-      const seedIndex = firstDx + 13;
+  if (firstDx >= 0) {
+    const seed = dx.slice(firstDx, firstDx + dmiPeriod)
+      .filter((value): value is number => value !== null);
+    if (seed.length === dmiPeriod) {
+      let current = seed.reduce((sum, value) => sum + value, 0) / dmiPeriod;
+      const seedIndex = firstDx + dmiPeriod - 1;
       adx[seedIndex] = current;
       for (let i = seedIndex + 1; i < candles.length; i++) {
         if (dx[i] !== null) {
-          current = (current * 13 + dx[i]!) / 14;
+          current = (current * (dmiPeriod - 1) + dx[i]!) / dmiPeriod;
           adx[i] = current;
         }
       }
