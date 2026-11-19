@@ -91,11 +91,29 @@ async function mcpFetch(
   const contentType = res.headers.get("content-type") || "";
   let data: JsonRpcResponse;
   if (contentType.includes("text/event-stream")) {
-    const text = await res.text();
-    const match = text.match(/^data: (.+)$/m);
-    data = match ? JSON.parse(match[1]) : { jsonrpc: "2.0" };
+    const streamText = await res.text();
+    const dataLines = streamText
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim())
+      .filter(Boolean);
+    const payload = dataLines.at(-1);
+    if (!payload) {
+      throw new Error(
+        `MCP returned an empty event stream (HTTP ${res.status}). Check the Worker response and tool execution logs.`
+      );
+    }
+    data = JSON.parse(payload);
   } else {
-    data = await res.json();
+    const responseText = await res.text();
+    if (!responseText.trim()) {
+      throw new Error(`MCP returned an empty response (HTTP ${res.status}).`);
+    }
+    data = JSON.parse(responseText);
+  }
+
+  if (!res.ok) {
+    throw new Error(data.error?.message || `MCP request failed (HTTP ${res.status}).`);
   }
 
   return { data, sessionId: newSessionId };
@@ -579,7 +597,14 @@ function MainApp() {
   const [tools, setTools] = useState<McpTool[]>([]);
   const [resources, setResources] = useState<McpResource[]>([]);
   const [results, setResults] = useState<ToolResult[]>([]);
+  const resultsRef = useRef<HTMLElement | null>(null);
   const sessionRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (results.length > 0) {
+      resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [results]);
 
   const connect = useCallback(async () => {
     try {
@@ -655,12 +680,16 @@ function MainApp() {
             isError?: boolean;
           }
         | undefined;
-      const text = result?.content?.[0]?.text ?? JSON.stringify(result);
+      const rpcError = res.data?.error;
+      const resultText = result?.content?.[0]?.text;
+      const text = rpcError
+        ? `MCP error ${rpcError.code}: ${rpcError.message}`
+        : resultText ?? (result ? JSON.stringify(result, null, 2) : "MCP returned no result payload.");
       setResults((prev) => [
         {
           label: name,
           text,
-          isError: result?.isError ?? false,
+          isError: Boolean(rpcError || result?.isError || !result),
           timestamp: Date.now()
         },
         ...prev
@@ -858,7 +887,7 @@ function MainApp() {
               )}
 
               {results.length > 0 && (
-                <section>
+                <section ref={resultsRef}>
                   <div className="flex items-center justify-between mb-3">
                     <Text size="base" bold>
                       Results
