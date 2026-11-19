@@ -190,7 +190,7 @@ export function registerMarketTrendTool(
   server.registerTool(
     "market_trend_assessment",
     {
-      description: "Read-only NIFTY 50 and BANK NIFTY market trend assessment using Zerodha historical candles. Calculates EMA20, EMA50, SuperTrend (10,3), DMI (+DI/-DI) and ADX(14) on daily and completed 3-hour candles. Identifies trend alignment, strength and weakening. No orders or positions are changed.",
+      description: "Read-only NIFTY 50 and BANK NIFTY market trend assessment using Zerodha historical candles. Calculates EMA20, EMA50, SuperTrend (10,3), DMI (+DI/-DI) and ADX(14) on completed daily and 60-minute candles. Identifies trend alignment, strength and weakening. No orders or positions are changed.",
       inputSchema: {
         lookback_days: z.number().int().min(100).max(350).optional(),
       },
@@ -213,17 +213,17 @@ export function registerMarketTrendTool(
           fetchHistorical("/instruments/historical/" + instrument.token + "/60minute?" +
             new URLSearchParams({ from: intradayFrom, to }).toString()),
         ]);
-        const dailyCandles: Candle[] = Array.isArray(dailyResponse?.data?.candles) ? dailyResponse.data.candles : [];
+        const dailyCandles: Candle[] = (Array.isArray(dailyResponse?.data?.candles) ? dailyResponse.data.candles : []).filter((c: Candle) => c[0].slice(0, 10) < today);
         const hourlyCandles: Candle[] = Array.isArray(hourlyResponse?.data?.candles) ? hourlyResponse.data.candles : [];
         // Exclude the current session from intraday aggregation so incomplete live candles cannot create false signals.
         const completedHourly = hourlyCandles.filter((c) => c[0].slice(0, 10) < today);
         const completedHourlyCandles = completedHourly;
         const daily = summarize(instrument.name, dailyCandles, "1D");
-        const threeHour = summarize(instrument.name, completedHourlyCandles, "60M (completed candles)");
+        const intraday = summarize(instrument.name, completedHourlyCandles, "60M (completed candles)");
         return {
           instrument: instrument.name,
           daily,
-          intraday: threeHour,
+          intraday,
           overall_assessment: classify(daily, threeHour),
         };
       }));
@@ -240,7 +240,7 @@ export function registerMarketTrendTool(
               primary_trend: "SuperTrend (10,3)",
               moving_averages: ["EMA20", "EMA50"],
               trend_strength: "DMI / ADX(14); ADX >=25 strong, 20-25 developing, below 20 weak/non-trending",
-              timeframes: ["Daily", "Completed 60-minute OHLC candles"],
+              timeframes: ["Completed daily candles", "Completed 60-minute OHLC candles"],
               lookback_days: lookback_days ?? 300,
               current_session_intraday_candles_excluded: true,
             },
