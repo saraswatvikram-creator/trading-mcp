@@ -18,10 +18,6 @@ function shiftDays(date: Date, days: number): Date {
   return new Date(date.getTime() - days * 24 * 60 * 60 * 1000);
 }
 
-function numeric(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : NaN;
-}
-
 function ema(values: number[], period: number): Array<number | null> {
   const result: Array<number | null> = Array(values.length).fill(null);
   if (values.length < period) return result;
