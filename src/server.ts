@@ -6,6 +6,7 @@ import { registerFivePaisaTools, handleFivePaisaCallback, getFivePaisaHoldings, 
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 import { runUpdateAuth, handleAuthRoute } from "./auth";
+import { registerMarketTrendTool } from "./marketTrend";
 
 type Env = {
   ZERODHA_API_KEY: string;
@@ -635,6 +636,8 @@ function createServer(
   registerGrowwTools(server, env);
   registerMStockTools(server, env);
   registerFivePaisaTools(server, env, baseUrl);
+  // Read-only market trend assessment; reuses the existing Zerodha token and API client.
+  registerMarketTrendTool(server, (path) => zerodhaGet(path, env));
   // ==========================================================
   // DAILY AUTHENTICATION GATE
   // ==========================================================
